@@ -725,8 +725,8 @@ function SpliceAI_install() {
         hg19|GRCh37|hg38|GRCh38) ;;
         *) log "Not supported assembly version: ${assembly_version}"; return 1 ;;
     esac
-    # priva spliceai-cache-input runs install_utils.sh from PRIVA_SCRIPT_DIR, which
-    # priva_resolve_binary sets to this checkout's scripts folder.
+    # priva spliceai-cache-input prepares native SpliceAI2 tables with its own
+    # spliceai2-install and spliceai2-prepare commands.
     priva_resolve_binary "${config_file}" || {
         log "The SpliceAI cache format helper (priva spliceai-cache-input) is not available."
         return 1

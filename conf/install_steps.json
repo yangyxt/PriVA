@@ -35,23 +35,7 @@
     {
       "id": "A2",
       "name": "VEP_CACHE",
-      "calls": [
-        [
-          "vep_cache_api_install",
-          "--VEP_VERSION",
-          "{vep_installed_version}",
-          "--VEP_CACHEDIR",
-          "{vep_cache_dir}",
-          "--VEP_PLUGINSDIR",
-          "{vep_plugins_dir}",
-          "--VEP_ASSEMBLY",
-          "{assembly}",
-          "--VEP_PLUGINSCACHEDIR",
-          "{vep_plugins_cachedir}",
-          "--config",
-          "{config}"
-        ]
-      ],
+      "module": "modules/local/install_steps/vep_cache.nf",
       "needs": [],
       "outputs": [
         "vep_cache_dir",
@@ -153,20 +137,8 @@
     {
       "id": "B4",
       "name": "SPLICEAI",
-      "calls": [
-        [
-          "SpliceAI_install",
-          "{config}",
-          "{vep_plugins_cachedir}",
-          "{vep_plugins_dir}"
-        ]
-      ],
-      "runs": [
-        "SpliceAI2_install"
-      ],
-      "needs": [
-        "A2"
-      ],
+      "module": "modules/local/install_steps/spliceai.nf",
+      "needs": [],
       "outputs": [
         "spliceai_snv_prescore",
         "spliceai_indel_prescore"

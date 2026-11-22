@@ -6,9 +6,10 @@
 //! Python script's options:
 //! - `install --config C --cache-dir D --snv S --indel I`: reads only the
 //!   bounded header of each score file (gzip is found by its magic bytes, not
-//!   its name); a native SpliceAI2 table is handed to `install_utils.sh
-//!   SpliceAI2_install` (found in the folder named by the environment variable
-//!   `PRIVA_SCRIPT_DIR`, because Rust has no `__file__`; no option is added); a
+//!   its name); a native SpliceAI2 table is prepared and registered by this
+//!   program's `spliceai2-install check`, `spliceai2-prepare prepare` and
+//!   `spliceai2-install register` (the steps of `install_utils.sh
+//!   SpliceAI2_install`, which the script ran); a
 //!   SpliceAI2 VCF must have its completed adapter receipt, a SpliceAI v1 VCF
 //!   its tabix index, which must return the file's first record; then the two
 //!   `spliceai_*_prescore` values of the YAML configuration are replaced in
@@ -20,7 +21,8 @@
 //! The report is printed as sorted JSON on one line. Exit codes follow the
 //! script: 2 for a rejected input (a ValueError or OSError in Python), 1 for
 //! an error the script does not handle (a traceback in Python), the helper
-//! script's own exit code when `install_utils.sh` fails, 0 on success.
+//! preparation's exit code when it fails (1, or the registration's own), 0 on
+//! success.
 //!
 //! The command line is the script's `argparse` parser reproduced (see the
 //! command line section below): same options, abbreviations, usage lines, help
@@ -38,9 +40,8 @@
 //!   keys and tabs inside comments and quoted text are read as PyYAML reads them;
 //! - for text PyYAML itself refuses, the exit code agrees (2 here, 1 for the
 //!   cutoffs script) but PyYAML's multi-line diagnostic is replaced by one line;
-//! - `install_utils.sh` is looked up in the folder named by the environment
-//!   variable `PRIVA_SCRIPT_DIR` (the script finds it beside itself); without
-//!   it a native-table install stops with exit code 1;
+//! - a native SpliceAI2 table is prepared by this program's own commands, not
+//!   by `install_utils.sh SpliceAI2_install`;
 //! - for a corrupt deflate stream the script prints zlib's reason ("invalid
 //!   distance too far back"); here the reason is generic. A damaged gzip header
 //!   or trailer, a missing end and trailing bytes read as Python reads them;
@@ -2254,6 +2255,107 @@ fn validate_v1_indexes(snv: &str, indel: &str) -> Done<Vec<Tracked>> {
 
 // ---------------------------------------------------------------- install
 
+/// What `install_utils.sh SpliceAI2_install CONFIG MANIFEST OUTPUT_DIR` did,
+/// with this program's own commands: `spliceai2-install check` (GRCh38 only,
+/// a complete manifest, no unfinished output), `spliceai2-prepare prepare`
+/// unless OUTPUT_DIR holds a receipt (verified again by the next command),
+/// then `spliceai2-install register`, which records the two outputs in the
+/// configuration. A failed check or preparation exits 1, as the function
+/// returned; a failed registration keeps its own exit code.
+fn prepare_spliceai2(config: &Path, manifest: &Path, output: &Path) -> Done<()> {
+    let program =
+        std::env::current_exe().map_err(|error| Failure::os(&error, Path::new("priva")))?;
+    let receipt = output.join("adapter.ready.json");
+    let run = |args: &[&std::ffi::OsStr], capture: bool| -> Done<(i32, String)> {
+        let mut command = Command::new(&program);
+        command.args(args);
+        if capture {
+            command.stdout(std::process::Stdio::piped());
+        }
+        let done = command
+            .spawn()
+            .and_then(|child| child.wait_with_output())
+            .map_err(|error| Failure::os(&error, &program))?;
+        let code = match done.status.code() {
+            Some(0) => 0,
+            Some(code) if code > 0 => code,
+            _ => 1,
+        };
+        Ok((code, String::from_utf8_lossy(&done.stdout).into_owned()))
+    };
+    let (code, identities) = run(
+        &[
+            "spliceai2-install".as_ref(),
+            "check".as_ref(),
+            "--config".as_ref(),
+            config.as_os_str(),
+            "--manifest".as_ref(),
+            manifest.as_os_str(),
+            "--output-dir".as_ref(),
+            output.as_os_str(),
+        ],
+        true,
+    )?;
+    if code != 0 {
+        return Err(Failure::Helper(1));
+    }
+    let mut words = identities.split_whitespace();
+    let (config_sha, manifest_sha) = (
+        words.next().unwrap_or_default().to_owned(),
+        words.next().unwrap_or_default().to_owned(),
+    );
+    if receipt.exists() || is_symlink(&receipt) {
+        eprintln!(
+            "Reusing the completed SpliceAI2 receipt after verification; no conversion is started."
+        );
+    } else {
+        eprintln!(
+            "Preparing SpliceAI2 GRCh38 from the complete source manifest; no score download or v1 fallback is performed."
+        );
+        let (code, _) = run(
+            &[
+                "spliceai2-prepare".as_ref(),
+                "prepare".as_ref(),
+                "--manifest".as_ref(),
+                manifest.as_os_str(),
+                "--assembly".as_ref(),
+                "GRCh38".as_ref(),
+                "--output-dir".as_ref(),
+                output.as_os_str(),
+                "--receipt".as_ref(),
+                receipt.as_os_str(),
+            ],
+            false,
+        )?;
+        if code != 0 {
+            return Err(Failure::Helper(1));
+        }
+    }
+    let (code, _) = run(
+        &[
+            "spliceai2-install".as_ref(),
+            "register".as_ref(),
+            "--config".as_ref(),
+            config.as_os_str(),
+            "--manifest".as_ref(),
+            manifest.as_os_str(),
+            "--output-dir".as_ref(),
+            output.as_os_str(),
+            "--receipt".as_ref(),
+            receipt.as_os_str(),
+            "--config-sha".as_ref(),
+            config_sha.as_ref(),
+            "--manifest-sha".as_ref(),
+            manifest_sha.as_ref(),
+        ],
+        false,
+    )?;
+    if code != 0 {
+        return Err(Failure::Helper(code));
+    }
+    Ok(())
+}
+
 fn install(config: &str, cache_dir: &str, snv: &str, indel: &str) -> Done<PairReport> {
     let read = read_config(Path::new(config))?;
     let mut inputs: Vec<Tracked> = Vec::new();
@@ -2270,18 +2372,6 @@ fn install(config: &str, cache_dir: &str, snv: &str, indel: &str) -> Done<PairRe
     let report = validate_pair(assembly, Path::new(snv), Path::new(indel))?;
     if report.format == "spliceai2_tsv" {
         let manifest = discover_manifest(Path::new(snv), Path::new(indel))?;
-        // The script finds install_utils.sh beside itself. A compiled program has no
-        // such place, so the folder comes from the environment; without it the run
-        // stops with exit code 1 (a refusal, not the script's exit code 2).
-        let script_dir = match std::env::var("PRIVA_SCRIPT_DIR") {
-            Ok(folder) if !folder.is_empty() => folder,
-            _ => {
-                return crash(
-                    "preparing a native SpliceAI2 table needs the environment variable PRIVA_SCRIPT_DIR set to the folder holding install_utils.sh",
-                );
-            }
-        };
-        let helper = Path::new(&script_dir).join("install_utils.sh");
         let output = absolute_path(Path::new(cache_dir))
             .join("SpliceAI2")
             .join("GRCh38");
@@ -2292,20 +2382,7 @@ fn install(config: &str, cache_dir: &str, snv: &str, indel: &str) -> Done<PairRe
             "Config changed after cache validation",
         )?;
         unchanged_inputs(&inputs)?;
-        let status = Command::new("bash")
-            .arg(&helper)
-            .arg("SpliceAI2_install")
-            .arg(&config_absolute)
-            .arg(&manifest)
-            .arg(&output)
-            .status()
-            .map_err(|error| Failure::os(&error, Path::new("bash")))?;
-        if !status.success() {
-            return Err(Failure::Helper(match status.code() {
-                Some(code) if code > 0 => code,
-                _ => 1,
-            }));
-        }
+        prepare_spliceai2(&config_absolute, &manifest, &output)?;
     } else {
         let again = resolve_strict(Path::new(config))?;
         require(
@@ -2342,11 +2419,9 @@ fn install(config: &str, cache_dir: &str, snv: &str, indel: &str) -> Done<PairRe
 // command has (`priva spliceai-cache-input`): the same options and abbreviations,
 // the same order of checks, the same usage lines and help texts (worded and
 // wrapped as argparse does at 80 columns), and the same error messages. The
-// script's `install` takes exactly `--config --cache-dir --snv --indel`; the
-// folder holding `install_utils.sh`, which Python finds beside the script, is
-// taken from the environment variable PRIVA_SCRIPT_DIR instead of an option,
-// so that the options (and what an abbreviation such as `--s` stands for) are
-// the script's own.
+// script's `install` takes exactly `--config --cache-dir --snv --indel`, so
+// the options (and what an abbreviation such as `--s` stands for) are the
+// script's own.
 
 const PROGRAM: &str = "priva spliceai-cache-input";
 const MAIN_USAGE: &str = "usage: priva spliceai-cache-input [-h] {install,adopt-prepared} ...";

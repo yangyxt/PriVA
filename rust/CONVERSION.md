@@ -1143,6 +1143,59 @@ Changes you can notice:
   the family (compared: both routes build their own); adopt an existing
   installation with `--adopt`.
 
+Part 2 moves the VEP cache (A2) and the SpliceAI scores (B4).
+
+```mermaid
+flowchart LR
+  subgraph A2["A2: VEP_CACHE"]
+    ver["vep, its Ensembl API and vep_install<br/>all name vep_installed_version"] --> inst["vep_install --AUTO cp --CONVERT<br/>cache into data/VEP_cache,<br/>plugins into a staging folder"]
+    inst --> chk["the cache: info.txt names the assembly,<br/>homo_sapiens, var_type tabix"]
+    chk --> plug["priva vep-plugins install<br/>(hashes), ensure-utr-reporting"]
+  end
+  subgraph B4["B4: SPLICEAI"]
+    hdr["priva spliceai-cache-input install<br/>reads each file's header"] -- "v1 VCF + .tbi,<br/>or a prepared SpliceAI2 VCF" --> place["recorded where it is"]
+    hdr -- "native SpliceAI2 tables<br/>+ downloads-complete manifest" --> prep["priva spliceai2-install check<br/>priva spliceai2-prepare prepare<br/>priva spliceai2-install register"]
+    prep --> vcf["data/VEP_plugin_cache/SpliceAI2/GRCh38<br/>SNV and indel VCFs, adapter receipt"]
+  end
+```
+
+| Step | Commands in the process |
+| --- | --- |
+| A2 | `vep --help`, Perl's `Bio::EnsEMBL::ApiVersion` and the install helper's `.version` checked against `vep_installed_version`; `vep_install -d SITE_PERL --AUTO cp --NO_UPDATE --CACHE_VERSION R -s homo_sapiens_merged --NO_HTSLIB --NO_BIOPERL --CONVERT --CACHEDIR data/VEP_cache --ASSEMBLY A --PLUGINS ... --PLUGINSDIR STAGING`; the checks of `priva_validate_vep_cache`; `priva vep-plugins install` and `ensure-utr-reporting`; `record --relocate` on the plugins' receipt |
+| B4 | `priva spliceai-cache-input install` on a configuration holding the assembly and the two files you set; for native SpliceAI2 tables it runs `spliceai2-install check`, `spliceai2-prepare prepare` and `spliceai2-install register` itself (the steps of `SpliceAI2_install`); `record --relocate` on the adapter receipt |
+
+Compared with the shell functions (`tests/install_fixtures.py vep` writes an
+environment of stand-ins for `vep`, `vep_install`, `perl` and `conda`;
+`spliceai` writes v1 VCFs and native SpliceAI2 shards; `--old-priva` runs the
+old route with the program built from the commit before the change, since B4
+also changes `priva spliceai-cache-input`):
+
+| Step | Cases compared | Result |
+| --- | --- | --- |
+| A2 | GRCh38 and GRCh37 | the same cache (every file) and plugins apart from the plugins' receipt naming its own folder (`--own-paths`) |
+| A2 | `vep_installed_version` 115 with VEP 116 installed; a cache whose `info.txt` names the other assembly; `vep_install` failing | each stops both routes |
+| B4 | SpliceAI v1 VCFs, GRCh37 and GRCh38 | the same files (both record the files you set) |
+| B4 | the 47 native SpliceAI2 shards with a complete manifest (pinned GENCODE 48 GTF, scored regions, a GENCODE 50 GTF that renames a gene, Ensembl's `SpliceAI.pm` of VEP 116) | the same SNV and indel VCFs and indexes; the adapter receipts differ only in the program that converted (two builds) |
+| B4 | the native shards without gene-context resources | the same refusal in both (`Pinned GENCODE48 GTF is required`) |
+
+Changes you can notice:
+
+- A2 no longer writes `PERL5LIB` and `PATH` into your conda environment's
+  settings (nothing reads them: every VEP command names `--dir_plugins`), and
+  keeps no release-transition file in it: a new release is a new step folder,
+  not an upgrade of the old plugins folder in place. It no longer refuses to
+  run outside a conda environment; `vep_install` is given the first
+  `site_perl` folder of the `perl` on PATH.
+- A2 always installs into its own new folder, so the reuse of an existing
+  cache and the resumption of an interrupted UTRAnnotator change, which the
+  function handled in a shared folder, are not needed.
+- B4 records the files you set where they are (the shell function did too)
+  and never asks: without the two files it stops with where to get them. It
+  no longer waits for A2.
+- `priva spliceai-cache-input install` prepares native SpliceAI2 tables with
+  its own commands instead of running `install_utils.sh SpliceAI2_install`,
+  so it no longer needs `PRIVA_SCRIPT_DIR`.
+
 ### Phases 3 to 7
 
 | Phase | Scope | Shell glue now | Python it still runs | Work (tools keep their commands) |
@@ -1150,7 +1203,7 @@ Changes you can notice:
 | 3 | Downloads: A1, A4, A5, B1, B2, B3, B5, B6, B7, B8, B9, D0, F1 | 4 to 10 functions each | `alternative_start_codon.py` (A4) | Each a Nextflow process: curl or git, then `priva install-task record` for the receipt. Done for A1, A4, B1, B2, B3, B5, B6, B7, B8, B9 and F1 (above); A4 no longer runs `alternative_start_codon.py`, whose pickle the Rust detector never reads |
 | 4 | Pipeline scripts: `annotation_vcf.sh` (1,827 lines), `filtration_vcf_per_fam.sh` (356), `prioritization_vcf_per_fam.sh` (430), `common_bash_utils.sh` (1,627) | run inside every analysis task | an inline `python - <<PY` block in `anno_VEP_cache_worker`, and `cadd_conda.py` (finds CADD's conda) | The annotation, filtration and prioritization tasks already exist per step; each runs VEP, bcftools, `CADD.sh` and `priva` with their own command lines instead of a shell function. `priva task run` keeps the task's checks and runs them, since which commands run depends on the settings. Done (above) for filtration, the prioritization steps and the six annotation steps; the scripts stay for the installer and `--phase annotation` until phase 6 |
 | 5 | Steps on native builders: A5 (moved from phase 3), C6, C8, C10, C11, D6, D8, D9, F4 to F10 | 7 to 19 functions each | `protein_domain_mapping.py` (C8's rebuild) | Each a process; F4's acquisition is curl and `priva gene-mechanism prepared`. Done (above), except F5's rebuild, which needs A2's two VEP caches and moves to phase 6 |
-| 6 | Heavy chains: A2, B4, C1, C3, C4, D0 (moved from phase 3), D1, E1, and F5's rebuild. Done (above): C1_chr*, C1 and D0 | 13 to 49 functions each | `cadd_scripts_install.py`, `cadd_prescore_index.py` (kept: they belong to CADD) | VEP, bcftools, CrossMap and `CADD.sh` command lines in the process; one change per step |
+| 6 | Heavy chains: A2, B4, C1, C3, C4, D0 (moved from phase 3), D1, E1, and F5's rebuild. Done (above): C1_chr*, C1, D0, A2 and B4 | 13 to 49 functions each | `cadd_scripts_install.py`, `cadd_prescore_index.py` (kept: they belong to CADD) | VEP, bcftools, CrossMap and `CADD.sh` command lines in the process; one change per step |
 | 7 | Remove the shell installer | `main_install`, `install_cluster.sh`, the `*.sbatch` scripts | | Delete `install_utils.sh` and the bash part of the digest |
 
 All seven phases are finished and checked end to end on the migration branch before any of it goes to `main`.

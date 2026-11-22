@@ -38,6 +38,25 @@ and the like), so the steps that read them can be compared both ways:
       a ##fileDate, a tabix index and the publisher's .md5), variant_summary
       (with its .md5) and MANE's summary, as the ClinVar download (D0) reads
       them from the sources of cache_resources.json.
+  python3 tests/install_fixtures.py vep --out DIR
+      DIR/envs/priva_acmg: an environment (CONDA_PREFIX) whose bin/ holds
+      stand-ins for vep, vep_install (Ensembl's INSTALL.pl), perl and conda,
+      with the Ensembl API and install helper modules naming release 116.
+      vep_install logs its arguments to DIR/vep_install.log and writes a
+      small converted cache and the requested plugins (UTRAnnotator: the
+      pinned upstream file) where it is told to, as the VEP cache step (A2)
+      runs it.
+  python3 tests/install_fixtures.py spliceai --out DIR
+      DIR/spliceai/v1/{snv,indel}.vcf.gz: SpliceAI v1 VCFs with tabix
+      indexes (no assembly in their headers, so either assembly takes them),
+      and DIR/spliceai/native/: the 47 native SpliceAI2 shards (sizes and
+      SHA-256 pinned) and their downloads-complete manifest, for the SpliceAI
+      step (B4). Without --plugin the shards hold headers only and the
+      manifest no gene-context resources, so the preparation stops; with
+      --plugin PATH (Ensembl's SpliceAI.pm of VEP 116, which the preparation
+      pins by SHA-256) the chr1 shards hold scores inside two genes and the
+      manifest pins a GENCODE 48 GTF, scored regions, a GENCODE 50 GTF that
+      renames one gene, and the plugin, so the preparation completes.
   python3 tests/install_fixtures.py ranking --out DIR
       DIR/net/HOST/PATH: the public inputs of the HPO gene ranking (F10), the
       small made-up files of rust/tests/hpo_gene_ranking, compressed as the
@@ -603,16 +622,170 @@ def write_clinvar_release(out: Path):
     print(net)
 
 
+VEP_INSTALL = r"""#!/usr/bin/env python3
+# A stand-in for Ensembl's INSTALL.pl (vep_install): the cache and plugins of
+# --AUTO cp, small and the same on every run.
+import gzip, os, shutil, sys
+from pathlib import Path
+args = sys.argv[1:]
+here = Path(__file__).resolve().parent
+with open(here.parents[2] / "vep_install.log", "a") as log:
+    log.write(" ".join(a if not a.startswith("/") else "<path>" for a in args) + "\n")
+def value(name):
+    return args[args.index(name) + 1] if name in args else None
+version, assembly = value("--CACHE_VERSION"), value("--ASSEMBLY")
+if os.environ.get("FAKE_VEP_INSTALL_FAIL"):
+    sys.exit("stand-in vep_install failure")
+if "c" in value("--AUTO"):
+    cache = Path(value("--CACHEDIR")) / "homo_sapiens_merged" / f"{version}_{assembly}"
+    (cache / "1").mkdir(parents=True, exist_ok=True)
+    (cache / "info.txt").write_text(f"species\thomo_sapiens\nassembly\t{os.environ.get('FAKE_VEP_ASSEMBLY', assembly)}\n"
+                                    f"source_assembly\t{assembly}\nvar_type\ttabix\n")
+    (cache / "chr_synonyms.txt").write_text("1\tchr1\nNC_000001.11\t1\n")
+    with gzip.GzipFile(cache / "1" / "all_vars.gz", "wb", mtime=0) as handle:
+        handle.write(b"1\t925952\trs1\tG/A\n")
+    (cache / "1" / "all_vars.gz.csi").write_bytes(b"CSI\x01stand-in")
+if "p" in value("--AUTO"):
+    folder = Path(value("--PLUGINSDIR"))
+    folder.mkdir(parents=True, exist_ok=True)
+    for name in value("--PLUGINS").split(","):
+        target = folder / f"{name}.pm"
+        if name == "UTRAnnotator":
+            shutil.copyfile(here / "UTRAnnotator116.original.pm", target)
+        else:
+            target.write_text(f"package {name};\n# stand-in plugin of VEP release {version}\n1;\n")
+    (folder / "plugin_config.txt").write_text(f"# stand-in plugin_config.txt of release {version}\n")
+"""
+
+
+def write_vep(out: Path):
+    root = Path(__file__).resolve().parents[1]
+    env = out / "envs" / "priva_acmg"
+    tools = env / "bin"
+    site = env / "lib" / "perl5" / "site_perl"
+    site.mkdir(parents=True, exist_ok=True)
+    (tools / "modules" / "Bio" / "EnsEMBL" / "VEP").mkdir(parents=True, exist_ok=True)
+    (tools / "modules" / "Bio" / "EnsEMBL" / "ApiVersion.pm").write_text(
+        "package Bio::EnsEMBL::ApiVersion;\nsub software_version { return 116; }\n1;\n")
+    (tools / "modules" / "Bio" / "EnsEMBL" / "VEP" / "Utils.pm").write_text(
+        "package Bio::EnsEMBL::VEP::Utils;\nuse Exporter 'import';\nour @EXPORT_OK = ('get_version_data');\n"
+        "sub get_version_data { return {'ensembl-vep' => {'release' => 'release/116'}}; }\n1;\n")
+    (tools / ".version").write_text("{}\n")
+    shutil.copyfile(root / "tests/fixtures/UTRAnnotator116.original.pm", tools / "UTRAnnotator116.original.pm")
+    scripts = {
+        "vep": "#!/bin/sh\nprintf '#----------------------------------#\\n# ENSEMBL VARIANT EFFECT PREDICTOR #\\n"
+               "#----------------------------------#\\n\\nVersions:\\n  ensembl              : 116.0\\n"
+               "  ensembl-vep          : 116.0\\n'\n",
+        "vep_install": VEP_INSTALL,
+        "perl": f"#!/bin/sh\nexec /usr/bin/perl -I{site} \"$@\"\n",
+        "conda": "#!/bin/sh\nexit 0\n",
+    }
+    for name, text in scripts.items():
+        (tools / name).write_text(text)
+        (tools / name).chmod(0o755)
+    print(env)
+
+
+def write_spliceai(out: Path, plugin=None):
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location("spliceai_cache_input", root / "scripts/spliceai_cache_input.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    v1 = out / "spliceai" / "v1"
+    v1.mkdir(parents=True, exist_ok=True)
+    header = ["##fileformat=VCFv4.0",
+              '##INFO=<ID=SpliceAI,Number=.,Type=String,Description="SpliceAIv1.3 variant annotation. '
+              'Format: ALLELE|SYMBOL|DS_AG|DS_AL|DS_DG|DS_DL|DP_AG|DP_AL|DP_DG|DP_DL">',
+              "##contig=<ID=1,length=249250621>", "\t".join(module.VCF_COLUMNS)]
+    for kind, rows in (("snv", ["1\t69091\t.\tA\tC\t.\t.\tSpliceAI=C|OR4F5|0.01|0.00|0.00|0.00|-15|42|2|-27"]),
+                       ("indel", ["1\t69092\t.\tT\tTA\t.\t.\tSpliceAI=TA|OR4F5|0.00|0.02|0.00|0.00|-3|8|1|-2"])):
+        plain = v1 / f"{kind}.vcf"
+        plain.write_text("\n".join(header + rows) + "\n")
+        with open(v1 / f"{kind}.vcf.gz", "wb") as handle:
+            subprocess.run(["bgzip", "-c", plain], stdout=handle, check=True)
+        subprocess.run(["tabix", "-f", "-p", "vcf", v1 / f"{kind}.vcf.gz"], check=True)
+        plain.unlink()
+    native = out / "spliceai" / "native"
+    native.mkdir(parents=True, exist_ok=True)
+    columns = module.native_columns()
+    chroms = [f"chr{n}" for n in range(1, 23)] + ["chrX", "chrY"]
+
+    def row(chrom, pos, ref, alt, strand, delta):
+        # Top three of each effect: delta (signed), ref and alt scores, then
+        # the distance (two distances for junctions); the summary is the
+        # largest of the four top0 site deltas.
+        values = [chrom, str(pos), ref, alt, strand]
+        for effect in ("donor_gain", "donor_loss", "acceptor_gain", "acceptor_loss", "jxn_gain", "jxn_loss"):
+            values += [delta, "0.00", "0.00", "0.00", "0.10", "0.10", "0.10", "0.10", "0.10"]
+            values += ["-4", "3", "12"] if not effect.startswith("jxn") else ["-4", "3", "12", "5", "-6", "7"]
+        return "\t".join(values + [delta]) + "\n"
+
+    # A scored variant inside the gene of each chromosome, and on chr1 one
+    # in each of its two genes (ALPHA on +, BETA on -), when the gene-context
+    # resources are written (a projection must hold a record).
+    rows = {(kind, chrom): [row(chrom, 150, *alleles, "+", "0.25")] for chrom in chroms
+            for kind, alleles in (("snv", ("A", "C")), ("indel", ("A", "AT")))}
+    rows[("snv", "chr1")].append(row("chr1", 1500, "G", "T", "-", "0.05"))
+    rows[("indel", "chr1")].append(row("chr1", 1600, "GC", "G", "-", "0.01"))
+    files = []
+    for kind in ("snv", "indel"):
+        for chrom in chroms:
+            if kind == "indel" and chrom == "chrY":
+                continue
+            shard = native / f"SpliceAI2_GRCh38_{kind}_{chrom}.tsv.gz"
+            text = "\t".join(columns) + "\n" + ("".join(rows.get((kind, chrom), [])) if plugin else "")
+            data = gzip.compress(text.encode(), mtime=0)
+            shard.write_bytes(data)
+            files.append({"kind": kind, "chrom": chrom, "path": str(shard), "bytes": len(data),
+                          "sha256": hashlib.sha256(data).hexdigest()})
+    manifest = {"schema_version": 1, "status": "downloads_complete", "confirmed_by": "fixture",
+                "resource": "SpliceAI2", "version": "2.0", "assembly": "GRCh38",
+                "source_revision": "cd1b8b82bcef9c97ac3b3b9a24f0de3a5bbf77f9", "files": files}
+    if plugin:
+        def pinned(name, text, **extra):
+            path = native / name
+            path.write_text(text)
+            data = path.read_bytes()
+            return {"path": str(path), "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(), **extra}
+
+        def gene(gene_id, name, chrom, start, end, strand):
+            return (f'{chrom}\tHAVANA\tgene\t{start}\t{end}\t.\t{strand}\t.\tgene_id "{gene_id}"; '
+                    f'gene_type "protein_coding"; gene_name "{name}"; level 2;\n')
+
+        # A scored gene on each chromosome (each is projected on its own),
+        # and a second on chr1 on the reverse strand; VEP 116's GENCODE 50
+        # names that one anew.
+        genes = [("ENSG00000000001", "ALPHA", "chr1", 100, 900, "+"),
+                 ("ENSG00000000002", "BETA", "chr1", 1000, 2000, "-")]
+        genes += [(f"ENSG{100 + n:011d}", f"GENE{chrom[3:]}", chrom, 100, 900, "+")
+                  for n, chrom in enumerate(chroms[1:])]
+        renamed = {"BETA": "BETA2"}
+        version = "##description: evidence-based annotation of the human genome (GRCh38), version {} (Ensembl {})\n"
+        manifest["scored_regions"] = pinned("scored_regions.tsv", "gene_id\tchrom\tgene_start\tgene_end\tstrand\n" + "".join(
+            f"{i}.5\t{c}\t{a}\t{b}\t{st}\n" for i, _, c, a, b, st in genes))
+        manifest["gencode_gtf"] = pinned("gencode.v48.annotation.gtf", version.format(48, 114) + "".join(
+            gene(f"{i}.5", n, c, a, b, st) for i, n, c, a, b, st in genes), release="GENCODE48")
+        manifest["vep_gene_annotation"] = pinned("gencode.v50.annotation.gtf", version.format(50, 116) + "".join(
+            gene(f"{i}.6", renamed.get(n, n), c, a, b, st) for i, n, c, a, b, st in genes), release="GENCODE50")
+        manifest["vep_spliceai_plugin"] = pinned("SpliceAI.pm", Path(plugin).read_text())
+    (native / "SpliceAI2_GRCh38.downloads-complete.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    print(out / "spliceai")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("what", choices=["clinvar", "alphamissense", "mechanism", "nonlof", "ranking", "gnomad", "clinvar_release"])
+    parser.add_argument("what", choices=["clinvar", "alphamissense", "mechanism", "nonlof", "ranking", "gnomad", "clinvar_release", "vep", "spliceai"])
     parser.add_argument("--out", required=True)
+    parser.add_argument("--plugin", help="spliceai: Ensembl's SpliceAI.pm of VEP 116 (VEP_plugins release/116)")
     args = parser.parse_args()
     out = Path(args.out).resolve()
+    if args.what == "spliceai":
+        return write_spliceai(out, args.plugin)
     {"clinvar": write_clinvar, "alphamissense": write_alphamissense,
      "mechanism": write_mechanism, "nonlof": write_nonlof,
      "ranking": write_ranking, "gnomad": write_gnomad,
-     "clinvar_release": write_clinvar_release}[args.what](out)
+     "clinvar_release": write_clinvar_release, "vep": write_vep,
+     "spliceai": write_spliceai}[args.what](out)
 
 
 if __name__ == "__main__":

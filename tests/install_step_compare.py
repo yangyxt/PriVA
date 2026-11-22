@@ -38,6 +38,11 @@ with it, and is only checked to be there on both sides.
 
 --family: a key that names the chrX member of a chromosome family
 (NAME.chrX.vcf.gz and the like) is compared with its 23 other members.
+
+--old-priva PATH: the program the old route runs (and its shell function
+calls), when the change also changes a priva command the function ran: build
+the commit before the change and name its binary here. The default is
+--priva.
 """
 import argparse
 import fnmatch
@@ -175,10 +180,10 @@ def old_route(args, plan_json: Path, work: Path, env: dict) -> dict:
     here = work / "old" / "run"
     here.mkdir(parents=True, exist_ok=True)
     inputs = [x for r in args.input for x in ("--input", Path(r).resolve())]
-    run([args.priva, "install-task", "run", "--source-root", ROOT, "--registry", OLD_REGISTRY,
+    run([args.old_priva, "install-task", "run", "--source-root", ROOT, "--registry", OLD_REGISTRY,
          "--plan", plan_json, "--step", args.step, "--lineage", "old", "--folder", work / "old" / "folder",
          "--receipt", "receipt.json"] + inputs,
-        cwd=here, env=dict(env, PRIVA_BINARY=str(Path(args.priva).resolve()), INSTALL_THREADS="2"), check=True)
+        cwd=here, env=dict(env, PRIVA_BINARY=args.old_priva, INSTALL_THREADS="2"), check=True)
     return json.loads((here / "receipt.json").read_text())
 
 
@@ -261,6 +266,7 @@ def main():
     parser.add_argument("--config", required=True)
     parser.add_argument("--work", required=True)
     parser.add_argument("--priva", required=True)
+    parser.add_argument("--old-priva")
     parser.add_argument("--nextflow", required=True)
     parser.add_argument("--net")
     parser.add_argument("--input", action="append", default=[])
@@ -271,6 +277,7 @@ def main():
     args = parser.parse_args()
     args.config = str(Path(args.config).resolve())
     args.priva = str(Path(args.priva).resolve())
+    args.old_priva = str(Path(args.old_priva or args.priva).resolve())
     work = Path(args.work).resolve()
     if work.exists():
         subprocess.run(["chmod", "-R", "u+w", work])

@@ -985,17 +985,119 @@ which the workflow stopped calling when `ANNOTATE_COHORT` was removed), and
 the scripts' functions the installer calls (D1 annotates ClinVar with the
 gnomAD and VEP functions). They go with phase 6.
 
+### Phase 5: the steps on native builders as their own processes (22 November 2026)
+
+Fifteen more steps no longer go through `install_utils.sh`: A5, C6, C8, C10,
+C11, D6, D8, D9 and F4 to F10. As in phase 3, each is a process in
+`modules/local/install_steps/` that runs the tools' own commands and `priva`
+into its task's `data/` folder, then `priva install-task record`.
+
+Most of them reuse a file the repository ships unless a `PRIVA_FORCE_*`
+variable asks for a rebuild. The process makes the same choice the shell
+function made, and records the shipped file where it is:
+
+```mermaid
+flowchart TB
+  subgraph mech["Mechanism, GoFCards and HPO caches"]
+    direction LR
+    F1["F1 HPO and MONDO"] --> F4["F4 mechanism evidence<br/>shipped TSV, or curl G2P and Orphadata<br/>+ priva gene-mechanism prepared"]
+    F5["F5 GoFCards<br/>shipped cache (rebuild: phase 6)"] --> F7["F7 ClinVar injection<br/>shipped cache as it is, or<br/>priva gofcards-clinvar-injection"]
+    F6["F6 mechanism sources<br/>nothing, or priva gene-nonlof-mechanism<br/>--fetch-sources-only (VCV XML)"] --> F7
+    F6 --> F8["F8 non-LOF cache<br/>shipped, or priva gene-nonlof-mechanism"]
+    F7 --> F8
+    F4 --> F9["F9 HPO condition mechanism<br/>shipped, or priva hpo-condition-mechanism"]
+    F7 --> F9
+    D9["D9 ClinGen map and dosage<br/>shipped, or priva clingen-map build + curl"] --> F9
+    F10["F10 HPO gene ranking<br/>curl 13 public inputs<br/>+ priva hpo-gene-ranking"]
+  end
+```
+
+| Step | Default route | Rebuild (`PRIVA_FORCE_*`) or other route |
+| --- | --- | --- |
+| A5 NM-to-ENST | the shipped table of the assembly and VEP release, or the one you supply (linked with its `.provenance.json`) | `priva installer-prerequisites --stage mapping-source`, `biomart fetch`, `biomart verify` (BioMart is out of the test machine's reach: not run here) |
+| C6 AlphaMissense domains | `bcftools view -h` for the contigs, `priva alphamissense-domain chromosome` per contig, `merge`, `check` | |
+| C8 InterPro | the shipped mapping | curl InterPro's XML, `gzip -t`, `protein_domain_mapping.py` (still Python) |
+| C10 DAS domains | `priva cache-install resolve`, `alpha-exon-history chromosome`/`merge`/`export`, `domain-metadata build`, `das-domains transcripts`/`analyze` | |
+| C11 PM1 regions | `priva installer-prerequisites --stage mapping`, `biomart identity`, `mapped-artifact run --native-producer pm1-regions` | |
+| D6 ClinVar AF | `priva clinvar-contract`, `clinvar-gene-af build`, `cache --kind gene-af`, the same for exons | |
+| D8 ClinVar PM5 | `priva clinvar-contract header`, `clinvar-pm5-index` | |
+| D9 ClinGen | the shipped map and dosage table | `priva clingen-map build`; curl the dosage table, `mechanism-source validate` and `record-source`, awk |
+| F4 mechanism evidence | the shipped TSV | curl G2P and Orphadata (a selected URL checked by `mechanism-source validate`), `mechanism-source record-source`, `gene-mechanism prepared`, `mechanism-evidence validate` |
+| F5 GoFCards | the shipped cache | stops: rebuilding needs the GRCh37 and GRCh38 VEP caches, which come with A2's process in phase 6 |
+| F6 mechanism sources | nothing to fetch, no file recorded | `priva gene-nonlof-mechanism --fetch-sources-only`; records the VCV XML, or the `clinvar_vcv_xml` you supply |
+| F7 ClinVar injection | F5's shipped cache, as it is | for a cache F5 built: `sha256sum` of F6's XML, `priva gofcards-clinvar-injection`, `gofcards-cache-validate` (twice: the cache, then the XML it cites) |
+| F8 non-LOF cache | the shipped cache | `priva gene-nonlof-mechanism` with F7's cache and F6's XML, then `--validate-only` against the shipped schema |
+| F9 HPO condition mechanism | the shipped cache | `priva hpo-condition-mechanism` on F1, F4, F7 and D9, then `--validate-only` with the same inputs |
+| F10 HPO gene ranking | curl the public inputs (gunzip, gene2go's human rows, unzip the optional Human Protein Atlas tables), `priva hpo-gene-ranking prepare-gene-evidence` and `build-hpo-graph` | |
+
+Each was compared with its shell function with `tests/install_step_compare.py`
+on the same plan and inputs. `tests/install_fixtures.py` writes the inputs of
+the steps after the hours-long ones: a VEP-annotated ClinVar VCF (D1), an
+AlphaMissense VCF (C4), the HPO and MONDO results (F1), a normalized GoFCards
+cache (what F5 builds) and, for `tests/fake_net.py`, small G2P, Orphadata,
+ClinGen, ClinVar VCV (with its `.md5`, README and XSD) and HPO ranking
+downloads.
+
+| Step | Cases compared | Result |
+| --- | --- | --- |
+| D6, D8, D9 | hg38, GRCh38, hg19; D9 rebuilt | same bytes |
+| A5 | shipped hg38 and hg19 tables; a supplied pinned table; a supplied custom table; an invalid table | same bytes; the invalid table is refused both ways |
+| C6, C8, C10, C11 | the fixture AlphaMissense VCF (an intolerant and a tolerant domain); C8 shipped | same bytes (C10: all three keys) |
+| F4 | shipped; rebuilt from G2P and Orphadata; rebuilt from a selected G2P URL; a selected URL serving another table | same bytes; the wrong table is refused both ways |
+| F5, F6, F7, F8, F9 | shipped (the chain F5, F6, F7, F8, F9 on each other's receipts) | same bytes |
+| F6 | sources fetched (`PRIVA_FORCE_NONLOF_MECHANISM_CACHE=1`) | the same XML, the same requests both ways |
+| F7 | injection into a normalized cache with one matching VCV record | the same decompressed cache, audit and statistics as the shell function run on the same files (the old install route cannot do this, see below) |
+| F8, F9 | rebuilt | the same JSON apart from `built_at`, the build time each stamps (`--volatile built_at`) |
+| F10 | the 15 downloads (one optional table missing); a required one missing | the same folder apart from the download times in `download_log.tsv` and the manifest's own folder path (`--volatile downloaded_at --own-paths`); the missing input stops both |
+
+Changes you can notice:
+
+- F4's rebuild no longer runs `build_gene_pathogenic_mechanism_cache.py`:
+  curl downloads the two sources with the script's options (timeout, retries,
+  user agent, `PROXY_URL`) and `priva gene-mechanism prepared` builds the same
+  table. A failed download now stops the step; the script built the table
+  without that source, which storeDir would then have kept. Each download has
+  a `.source.json`; the script's `source_manifest.json`, `source_manifest.tsv`
+  and `run_summary.json`, which nothing reads, are not written.
+- A forced rebuild of F5 stops with a message until phase 6. Before, the
+  install workflow could not rebuild F5 either: the function wrote its cache
+  to the build folder, not to the key the step records.
+- F7 injects when F5 hands it a cache F5 built. Before, the install workflow
+  could not inject at all: the function looked for F5's cache in F7's own
+  build folder. Forcing the injection with F5's shipped cache stops, as it
+  did (that cache already carries its conditions).
+- `gofcards_clinvar_reinjection_lag_days` no longer delays a reinjection:
+  a step folder never holds an earlier cache to keep. With the shipped caches
+  F6 records nothing, so its weekly ClinVar release changes nothing after it;
+  with forced caches each new weekly release reruns F6, F7 and F8.
+- F6 lists `clinvar_vcv_xml` under `user_inputs`, and F6 and F8 list the G2P,
+  ClinGen and PanelApp URLs under `settings`, so they count in the lineage.
+- F6 and F8 read the HGNC table and the non-LOF schema shipped in `data/`.
+- C10 keeps its exon history and metadata in its own folder (the function
+  wrote them beside C6's statistics) and no longer writes the DAS completion
+  receipt: storeDir decides reuse.
+- `install-task record --relocate` keeps a JSON file's last line as it was
+  (F10's manifest has no final newline).
+- The fifteen steps have new code digests, so they and the steps after them
+  get new lineages once.
+
+Still Python in these steps: C8's rebuild (`protein_domain_mapping.py`).
+The native builders hash some scripts they replace and record those hashes
+(the non-LOF builder, the ClinVar injector and the HPO condition builder name
+`scripts/*.py` as their builder source), so those scripts stay until the
+cache formats stop naming them.
+
 ### Phases 3 to 7
 
 | Phase | Scope | Shell glue now | Python it still runs | Work (tools keep their commands) |
 | --- | --- | --- | --- | --- |
 | 3 | Downloads: A1, A4, A5, B1, B2, B3, B5, B6, B7, B8, B9, D0, F1 | 4 to 10 functions each | `alternative_start_codon.py` (A4) | Each a Nextflow process: curl or git, then `priva install-task record` for the receipt. Done for A1, A4, B1, B2, B3, B5, B6, B7, B8, B9 and F1 (above); A4 no longer runs `alternative_start_codon.py`, whose pickle the Rust detector never reads |
 | 4 | Pipeline scripts: `annotation_vcf.sh` (1,827 lines), `filtration_vcf_per_fam.sh` (356), `prioritization_vcf_per_fam.sh` (430), `common_bash_utils.sh` (1,627) | run inside every analysis task | an inline `python - <<PY` block in `anno_VEP_cache_worker`, and `cadd_conda.py` (finds CADD's conda) | The annotation, filtration and prioritization tasks already exist per step; each runs VEP, bcftools, `CADD.sh` and `priva` with their own command lines instead of a shell function. `priva task run` keeps the task's checks and runs them, since which commands run depends on the settings. Done (above) for filtration, the prioritization steps and the six annotation steps; the scripts stay for the installer and `--phase annotation` until phase 6 |
-| 5 | Steps on native builders: A5 (moved from phase 3), C6, C8, C10, C11, D6, D8, D9, F4 to F9 | 7 to 19 functions each | `protein_domain_mapping.py` (C8), `build_gene_pathogenic_mechanism_cache.py` acquisition (F4); a configured non-default builder script | Locks, receipts and reuse checks into `priva`; F4's acquisition |
-| 6 | Heavy chains: A2, C1, C3, C4, D0 (moved from phase 3), D1, E1 | 13 to 49 functions each | `cadd_scripts_install.py`, `cadd_prescore_index.py` (kept: they belong to CADD) | VEP, bcftools, CrossMap and `CADD.sh` command lines in the process; one change per step |
+| 5 | Steps on native builders: A5 (moved from phase 3), C6, C8, C10, C11, D6, D8, D9, F4 to F10 | 7 to 19 functions each | `protein_domain_mapping.py` (C8's rebuild) | Each a process; F4's acquisition is curl and `priva gene-mechanism prepared`. Done (above), except F5's rebuild, which needs A2's two VEP caches and moves to phase 6 |
+| 6 | Heavy chains: A2, B4, C1, C3, C4, D0 (moved from phase 3), D1, E1, and F5's rebuild | 13 to 49 functions each | `cadd_scripts_install.py`, `cadd_prescore_index.py` (kept: they belong to CADD) | VEP, bcftools, CrossMap and `CADD.sh` command lines in the process; one change per step |
 | 7 | Remove the shell installer | `main_install`, `install_cluster.sh`, the `*.sbatch` scripts | | Delete `install_utils.sh` and the bash part of the digest |
 
-Each phase is its own pull request against `main` once PR #1 is merged.
+All seven phases are finished and checked end to end on the migration branch before any of it goes to `main`.
 
 ## Retained Python tools
 

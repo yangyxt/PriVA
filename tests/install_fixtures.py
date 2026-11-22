@@ -13,13 +13,36 @@ and the like), so the steps that read them can be compared both ways:
       DIR/receipts/C4.json and DIR/C4/data/AlphaMissense/...: a bgzipped,
       indexed AlphaMissense VCF as VEP and gnomAD annotated it (C3, C4), with
       an intolerant and a tolerant Pfam domain.
+  python3 tests/install_fixtures.py mechanism --out DIR
+      DIR/receipts/F1.json and DIR/F1/data/...: a MONDO disease-scope registry
+      and scoped HPO assertions (F1) for four genes, and DIR/net/HOST/PATH:
+      the G2P and Orphadata downloads the mechanism evidence (F4) reads, for
+      tests/fake_net.py.
+  python3 tests/install_fixtures.py nonlof --out DIR
+      DIR/receipts/F5.json and DIR/F5/data/gofcards/...: a normalized GoFCards
+      cache without ClinVar conditions (what F5 builds), and DIR/net/HOST/PATH:
+      a weekly ClinVar VCV release (with its .md5, README and XSD) holding one
+      of its variants, G2P and ClinGen dosage tables, for the ClinVar
+      injection (F7) and the non-LOF mechanism sources and cache (F6, F8).
+      PanelApp and the GoFCards workbook are left out (the server's 404).
+  python3 tests/install_fixtures.py ranking --out DIR
+      DIR/net/HOST/PATH: the public inputs of the HPO gene ranking (F10), the
+      small made-up files of rust/tests/hpo_gene_ranking, compressed as the
+      sources serve them; one optional Human Protein Atlas table is left out.
 
 Then, for example:
 
   python3 tests/install_step_compare.py --step D8 --input DIR/receipts/D1.json ...
 """
 import argparse
+import csv
+import gzip
+import hashlib
+import importlib.util
+import io
 import json
+import shutil
+import zipfile
 import subprocess
 from pathlib import Path
 
@@ -209,13 +232,187 @@ def write_alphamissense(out: Path):
     print(receipts / "C4.json")
 
 
+REGISTRY = [
+    "disease_id", "mondo_id", "mondo_name", "mondo_version", "hpo_mendelian_inheritance",
+    "hpo_non_monogenic_inheritance", "mondo_hereditary", "mondo_neoplasm", "mondo_predisposition",
+    "mondo_omim_susceptibility", "disease_scope", "priva_scope", "scope_evidence", "scope_reference",
+    "scope_review_status", "scope_note",
+]
+ASSERTIONS = [
+    "gene_symbol", "disease_id", "hpo_id", "frequency", "evidence", "reference", "mondo_id",
+    "mondo_name", "disease_scope", "priva_scope", "scope_evidence", "scope_reference",
+    "scope_review_status",
+]
+G2P = [
+    "gene symbol", "disease name", "molecular mechanism", "confidence", "allelic requirement",
+    "cross cutting modifier", "phenotypes", "pmids", "g2p id", "disease mim", "disease MONDO",
+]
+# (gene, disease id, MONDO id, name, scope, PriVA scope)
+DISEASES = [
+    ("GENEA", "OMIM:100100", "MONDO:0000101", "condition A", "mendelian_non_neoplastic", "include"),
+    ("GENEB", "OMIM:100200", "MONDO:0000102", "condition B", "mendelian_non_neoplastic", "include"),
+    ("GENEC", "ORPHA:1001", "MONDO:0000103", "condition C", "mendelian_non_neoplastic", "include"),
+    ("GENED", "ORPHA:1002", "MONDO:0000104", "condition D", "mendelian_susceptibility_uncertain", "review"),
+]
+
+
+def table(names, rows, delimiter="\t") -> str:
+    stream = io.StringIO(newline="")
+    writer = csv.writer(stream, delimiter=delimiter, lineterminator="\n")
+    writer.writerow(names)
+    writer.writerows(rows)
+    return stream.getvalue()
+
+
+def write_gz(path: Path, text: str):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.GzipFile(path, "wb", mtime=0) as handle:
+        handle.write(text.encode())
+
+
+def write_mechanism(out: Path):
+    folder = out / "F1"
+    registry = folder / "data/mondo/disease_scope.tsv.gz"
+    assertions = folder / "data/hpo/genes_to_phenotype.assertions.tsv.gz"
+    obo = folder / "data/mondo/mondo-simple.fixture.obo"
+    rows = []
+    for gene, disease, mondo, name, scope, priva in DISEASES:
+        rows.append([disease, mondo, name, "fixture", "True", "False", "True", "False", "False", "False",
+                     scope, priva, "fixture", "fixture", "automatic", ""])
+    write_gz(registry, table(REGISTRY, rows))
+    hpo = []
+    for gene, disease, mondo, name, scope, priva in DISEASES:
+        for term, frequency in (("HP:0001250", "HP:0040281"), ("HP:0000006", ""), ("HP:0003829", "")):
+            hpo.append([gene, disease, term, frequency, "PCS", "PMID:1", mondo, name, scope, priva,
+                        "fixture", "fixture", "automatic"])
+    write_gz(assertions, table(ASSERTIONS, hpo))
+    obo.write_text("format-version: 1.2\ndata-version: mondo/releases/fixture/mondo-simple.obo\n\n"
+                   "[Term]\nid: MONDO:0003847\nname: hereditary disease\n")
+    net = out / "net"
+    g2p = net / "www.ebi.ac.uk/gene2phenotype/api/panel/all/download"
+    g2p.parent.mkdir(parents=True, exist_ok=True)
+    g2p.write_text(table(G2P, [
+        ["GENEA", "condition A", "loss of function", "definitive", "monoallelic_autosomal", "",
+         "HP:0001250;HP:0003829", "123;456", "G2P00001", "100100", "MONDO:0000101"],
+        ["GENEB", "condition B", "altered gene product structure", "strong", "monoallelic_autosomal",
+         "typically mosaic", "HP:0001250", "789", "G2P00002", "100200", "MONDO:0000102"],
+        ["GENEC", "condition C", "dominant negative", "moderate", "biallelic_autosomal", "", "",
+         "", "G2P00003", "", "MONDO:0000103"],
+        ["GENED", "condition D", "undetermined", "limited", "monoallelic_X_hemizygous", "", "", "",
+         "G2P00004", "", ""],
+    ], delimiter=","))
+    association = ("<DisorderGeneAssociation><DisorderGeneAssociationStatus><Name>{status}</Name>"
+                   "</DisorderGeneAssociationStatus><DisorderGeneAssociationType><Name>{kind}</Name>"
+                   "</DisorderGeneAssociationType><Gene><Symbol>{gene}</Symbol></Gene>"
+                   "<SourceOfValidation>{pmids}</SourceOfValidation></DisorderGeneAssociation>")
+    disorders = []
+    for code, name, gene, kind, status in (
+            ("1001", "condition C", "GENEC", "Disease-causing germline mutation(s) (loss of function) in", "Assessed"),
+            ("1002", "condition D", "GENED", "Disease-causing germline mutation(s) (gain of function) in", "Assessed"),
+            ("1003", "condition E", "GENEA", "Disease-causing germline mutation(s) (gain of function) in", "Not yet assessed")):
+        disorders.append(f"<Disorder><OrphaCode>{code}</OrphaCode><Name>{name}</Name><DisorderGeneAssociationList>"
+                         + association.format(status=status, kind=kind, gene=gene, pmids="111[PMID]_222[PMID]")
+                         + "</DisorderGeneAssociationList></Disorder>")
+    orpha = net / "www.orphadata.com/data/xml/en_product6.xml"
+    orpha.parent.mkdir(parents=True, exist_ok=True)
+    orpha.write_text('<?xml version="1.0" encoding="UTF-8"?>\n<JDBOR><DisorderList>'
+                     + "".join(disorders) + "</DisorderList></JDBOR>\n")
+    receipts = out / "receipts"
+    receipts.mkdir(parents=True, exist_ok=True)
+    (receipts / "F1.json").write_text(json.dumps(receipt("F1", "HPO_MONDO", folder, {
+        "hpo_assertions": assertions, "mondo_obo": obo, "mondo_disease_scope_registry": registry}), indent=2) + "\n")
+    print(receipts / "F1.json")
+
+
+def injection_fixtures():
+    """The hand-made GoFCards cache and VCV records of the injection's own comparison."""
+    path = Path(__file__).resolve().parents[1] / "rust/tests/gofcards_clinvar_injection_compare.py"
+    spec = importlib.util.spec_from_file_location("gofcards_clinvar_injection_compare", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def write_nonlof(out: Path):
+    injection = injection_fixtures()
+    folder = out / "F5"
+    normalized = folder / "data/gofcards/build_work/gofcards_exact_gof.normalized.json.gz"
+    write_gz(normalized, json.dumps(injection.base_cache(), sort_keys=True))
+    net = out / "net"
+    ncbi = net / "ftp.ncbi.nlm.nih.gov/pub/clinvar"
+    release = ncbi / "xml/weekly_release/ClinVarVCVRelease_00-latest_weekly.xml.gz"
+    write_gz(release, injection.document(injection.archive()))
+    digest = hashlib.md5(release.read_bytes()).hexdigest()
+    (release.parent / (release.name + ".md5")).write_text(f"{digest}  {release.name}\n")
+    (ncbi / "xml/_README").write_text("ClinVar XML files (fixture)\n")
+    (ncbi / "xsd_public").mkdir(parents=True, exist_ok=True)
+    (ncbi / "xsd_public/_index").write_text('<html><body><a href="ClinVar_VCV_2.4.xsd">ClinVar_VCV_2.4.xsd</a>\n'
+                                            '<a href="ClinVar_VCV_2.3.xsd">ClinVar_VCV_2.3.xsd</a></body></html>\n')
+    (ncbi / "xsd_public/ClinVar_VCV_2.4.xsd").write_text('<?xml version="1.0"?>\n'
+                                                       '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"/>\n')
+    g2p = net / "www.ebi.ac.uk/gene2phenotype/api/panel/all/download"
+    g2p.parent.mkdir(parents=True, exist_ok=True)
+    g2p.write_text(table(G2P, [
+        ["GENE1", "condition one", "gain of function", "definitive", "monoallelic_autosomal", "",
+         "HP:0001250", "123", "G2P00011", "100100", "MONDO:0000101"],
+        ["GENE2", "condition two", "dominant negative", "strong", "monoallelic_autosomal", "", "",
+         "456", "G2P00012", "", ""],
+    ], delimiter=","))
+    dosage = net / "ftp.clinicalgenome.org/ClinGen_gene_curation_list_GRCh38.tsv"
+    dosage.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(Path(__file__).resolve().parents[1] / "data/clingen/gene_dosage_sensitivity.hg38.tsv", dosage)
+    receipts = out / "receipts"
+    receipts.mkdir(parents=True, exist_ok=True)
+    (receipts / "F5.json").write_text(json.dumps(receipt("F5", "GOFCARDS_EXACT_GOF", folder, {
+        "gofcards_exact_gof_cache": normalized}), indent=2) + "\n")
+    print(receipts / "F5.json")
+
+
+RANKING = [
+    ("purl.obolibrary.org/obo/hp.owl", "../hp_fixture.owl", None),
+    ("purl.obolibrary.org/obo/hp/hpoa/phenotype_to_genes.txt", "phenotype_to_genes.txt", None),
+    ("purl.obolibrary.org/obo/go/go-basic.obo", "go-basic.obo", None),
+    ("current.geneontology.org/annotations/goa_human.gaf.gz", "goa_human.gaf", "gz"),
+    ("ftp.ncbi.nlm.nih.gov/gene/DATA/GENE_INFO/Mammalia/Homo_sapiens.gene_info.gz", "Homo_sapiens.gene_info", "gz"),
+    ("ftp.ncbi.nlm.nih.gov/gene/DATA/gene2go.gz", "gene2go", "gz"),
+    ("reactome.org/download/current/NCBI2Reactome_All_Levels.txt", "NCBI2Reactome_All_Levels.txt", None),
+    ("reactome.org/download/current/ReactomePathwaysRelation.txt", "ReactomePathwaysRelation.txt", None),
+    ("rest.uniprot.org/uniprotkb/stream", "uniprot_human_reviewed.tsv", "gz"),
+    ("purl.obolibrary.org/obo/pr.obo", "pr.obo", None),
+    ("www.informatics.jax.org/downloads/reports/MGI_GenePheno.rpt", "MGI_GenePheno.rpt", None),
+    ("www.informatics.jax.org/downloads/reports/HOM_MouseHumanSequence.rpt", "HOM_MouseHumanSequence.rpt", None),
+    ("www.orphadata.com/data/xml/en_product6.xml", "orphadata_en_product6.xml", None),
+    ("www.proteinatlas.org/download/tsv/rna_tissue_consensus.tsv.zip", "rna_tissue_consensus.tsv", "zip"),
+    ("www.proteinatlas.org/download/tsv/rna_single_cell_type.tsv.zip", "rna_single_cell_type.tsv", "zip"),
+]
+
+
+def write_ranking(out: Path):
+    raw = Path(__file__).resolve().parents[1] / "rust/tests/hpo_gene_ranking/tests/fixtures/raw"
+    for served, name, packing in RANKING:
+        target = out / "net" / served
+        target.parent.mkdir(parents=True, exist_ok=True)
+        source = (raw / name).resolve()
+        if packing == "gz":
+            with gzip.GzipFile(target, "wb", mtime=0) as handle:
+                handle.write(source.read_bytes())
+        elif packing == "zip":
+            with zipfile.ZipFile(target, "w") as archive:
+                archive.writestr(zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0)), source.read_bytes())
+        else:
+            shutil.copyfile(source, target)
+    print(out / "net")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("what", choices=["clinvar", "alphamissense"])
+    parser.add_argument("what", choices=["clinvar", "alphamissense", "mechanism", "nonlof", "ranking"])
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
     out = Path(args.out).resolve()
-    {"clinvar": write_clinvar, "alphamissense": write_alphamissense}[args.what](out)
+    {"clinvar": write_clinvar, "alphamissense": write_alphamissense,
+     "mechanism": write_mechanism, "nonlof": write_nonlof,
+     "ranking": write_ranking}[args.what](out)
 
 
 if __name__ == "__main__":

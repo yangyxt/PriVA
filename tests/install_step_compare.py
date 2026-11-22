@@ -21,6 +21,16 @@ decompressed bytes must be the same). Exit 1 on any difference.
 
 --new-only runs only the step's process and prints the keys it records (for a
 case the old function handled by writing beside a file you supply).
+
+A key whose bytes differ can be compared again apart from what is bound to
+differ between two runs, and is then reported as the same apart from it:
+
+--volatile NAME (repeatable): without the members named NAME at any depth of
+a JSON file (or gzip JSON), such as the time a builder stamps on what it
+writes (built_at), and without the column NAME of a tab-separated file whose
+first line names it (a download log's downloaded_at).
+--own-paths: with each route's own step folder (the receipt's "folder") read
+as the same, for a file that names where it lives.
 """
 import argparse
 import gzip
@@ -68,6 +78,49 @@ def gunzipped(path: Path) -> str | None:
         for block in iter(lambda: f.read(1 << 20), b""):
             h.update(block)
     return h.hexdigest()
+
+
+def without(value, volatile):
+    """A JSON value without the members named in volatile, at any depth."""
+    if isinstance(value, dict):
+        return {k: without(v, volatile) for k, v in value.items() if k not in volatile}
+    if isinstance(value, list):
+        return [without(v, volatile) for v in value]
+    return value
+
+
+def normalized(path: Path, folder: str, volatile) -> bytes:
+    """A file's bytes (decompressed) with its folder read as <FOLDER>, and
+    without its volatile JSON members or tab-separated columns."""
+    raw = path.read_bytes()
+    if raw[:2] == b"\x1f\x8b":
+        raw = gzip.decompress(raw)
+    if folder:
+        raw = raw.replace(folder.encode(), b"<FOLDER>")
+    if not volatile:
+        return raw
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        value = None
+    if isinstance(value, (dict, list)):
+        return json.dumps(without(value, set(volatile)), separators=(",", ":")).encode()
+    lines = raw.split(b"\n")
+    header = lines[0].split(b"\t")
+    drop = {i for i, name in enumerate(header) if name.decode(errors="replace") in volatile}
+    if not drop:
+        return raw
+    return b"\n".join(b"\t".join(c for i, c in enumerate(line.split(b"\t")) if i not in drop) for line in lines)
+
+
+def apart(path: Path, folder: str, volatile) -> str:
+    """The fingerprint of a file or folder, compared apart (see --volatile)."""
+    files = [path] if path.is_file() else sorted(
+        item for item in path.rglob("*")
+        if item.is_file() and not (item.relative_to(path).parts and item.relative_to(path).parts[0] == ".git"))
+    lines = [f"{item.relative_to(path) if item != path else ''} "
+             f"{hashlib.sha256(normalized(item, folder, volatile)).hexdigest()}" for item in files]
+    return hashlib.sha256("\n".join(lines).encode()).hexdigest()
 
 
 def run(command, **kw):
@@ -159,6 +212,8 @@ def main():
     parser.add_argument("--net")
     parser.add_argument("--input", action="append", default=[])
     parser.add_argument("--new-only", action="store_true")
+    parser.add_argument("--volatile", action="append", default=[])
+    parser.add_argument("--own-paths", action="store_true")
     args = parser.parse_args()
     args.config = str(Path(args.config).resolve())
     args.priva = str(Path(args.priva).resolve())
@@ -193,6 +248,14 @@ def main():
             print(f"  {key}: same decompressed {gunzipped(Path(a))} (gzip header differs)")
             print(f"    old {a}\n    new {b}")
             continue
+        if not same and (args.volatile or args.own_paths):
+            folders = (old.get("folder", ""), new.get("folder", "")) if args.own_paths else ("", "")
+            pa, pb = apart(Path(a), folders[0], args.volatile), apart(Path(b), folders[1], args.volatile)
+            if pa == pb:
+                reasons = args.volatile + (["its own folder"] if args.own_paths else [])
+                print(f"  {key}: same apart from {', '.join(reasons)} {pa}")
+                print(f"    old {a}\n    new {b}")
+                continue
         differ += not same
         print(f"  {key}: {'same' if same else 'DIFFERENT'} {fa}" + ("" if same else f" / {fb}"))
         print(f"    old {a}\n    new {b}")

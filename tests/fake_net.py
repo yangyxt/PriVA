@@ -3,8 +3,9 @@
 
 Installed as FOLDER/bin/curl and FOLDER/bin/wget (``fake_net.py install
 FOLDER``), first on PATH, it answers URL with the file FAKE_NET_ROOT/HOST/PATH
-(the query string left out), so an install step's old shell function and its
-process can be run on the same bytes without the network. A missing file is
+(the query string left out; a PATH that ends in / is PATH/_index), so an
+install step's old shell function and its process can be run on the same
+bytes without the network. A missing file is
 the server's 404: curl -f exits 22, wget exits 8. Every request is appended to
 FAKE_NET_ROOT/requests.log.
 """
@@ -16,13 +17,18 @@ from urllib.parse import urlsplit
 
 CURL_VALUES = {"-o", "--output", "--retry", "--retry-delay", "--connect-timeout",
                "--max-time", "-m", "--max-filesize", "-C", "--continue-at", "-H",
-               "--header", "-A", "--user-agent", "-w", "--write-out", "-D", "--dump-header"}
+               "--header", "-A", "--user-agent", "-w", "--write-out", "-D", "--dump-header",
+               "-x", "--proxy", "--max-redirs", "--speed-limit", "--speed-time"}
 WGET_VALUES = {"-O", "--output-document", "-t", "--tries", "-T", "--timeout", "-P"}
 
 
 def served(url: str) -> Path:
     parts = urlsplit(url)
-    return Path(os.environ["FAKE_NET_ROOT"]) / parts.netloc / parts.path.lstrip("/")
+    path = parts.path.lstrip("/")
+    # A folder's own URL (a path that ends in /) is its _index file.
+    if path.endswith("/") or not path:
+        path += "_index"
+    return Path(os.environ["FAKE_NET_ROOT"]) / parts.netloc / path
 
 
 def answer(url: str, output: str | None) -> bool:

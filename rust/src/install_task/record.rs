@@ -270,8 +270,12 @@ fn relocate(file: &Path, from: &Path, to: &Path) -> Result<()> {
         } else {
             super::compact(&value)?
         };
+        // The file keeps its last line as it was: with or without a newline.
         if text.ends_with('\n') && !out.ends_with('\n') {
             out.push('\n');
+        }
+        if !text.ends_with('\n') {
+            out.truncate(out.trim_end_matches('\n').len());
         }
         let partial = PathBuf::from(format!("{}.relocate", file.display()));
         std::fs::write(&partial, out)?;
@@ -361,6 +365,14 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&line).unwrap(),
             "{\"output\":\"/r/A1/L/data/ref.fa\"}"
+        );
+        // json.dump(indent=2) writes no newline after the closing brace.
+        let open = folder.join("manifest.json");
+        std::fs::write(&open, "{\n  \"raw_dir\": \"/w/1/data/raw\"\n}").unwrap();
+        relocate(&open, Path::new("/w/1/data"), Path::new("/r/F10/L/data")).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&open).unwrap(),
+            "{\n  \"raw_dir\": \"/r/F10/L/data/raw\"\n}"
         );
         let _ = std::fs::remove_dir_all(&folder);
     }

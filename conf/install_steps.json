@@ -1971,14 +1971,12 @@
     {
       "id": "F4",
       "name": "GENE_PATHOGENIC_MECHANISM",
-      "calls": [
-        [
-          "gene_pathogenic_mechanism_cache_install",
-          "{config}"
-        ]
-      ],
+      "module": "modules/local/install_steps/gene_mechanism.nf",
       "needs": [
         "F1"
+      ],
+      "stage": [
+        "mondo_disease_scope_registry"
       ],
       "outputs": [
         "ddg2p_mechanism_evidence"
@@ -2001,12 +1999,7 @@
     {
       "id": "F5",
       "name": "GOFCARDS_EXACT_GOF",
-      "calls": [
-        [
-          "gofcards_exact_gof_cache_install",
-          "{config}"
-        ]
-      ],
+      "module": "modules/local/install_steps/gofcards_exact_gof.nf",
       "needs": [],
       "outputs": [
         "gofcards_exact_gof_cache"
@@ -2031,19 +2024,20 @@
     {
       "id": "F6",
       "name": "MECHANISM_SOURCES",
-      "calls": [
-        [
-          "gene_nonlof_mechanism_cache_install",
-          "{config}",
-          "sources-only"
-        ]
-      ],
+      "module": "modules/local/install_steps/mechanism_sources.nf",
       "needs": [],
       "outputs": [],
       "optional_outputs": [
         "clinvar_vcv_xml"
       ],
-      "settings": [],
+      "user_inputs": [
+        "clinvar_vcv_xml"
+      ],
+      "settings": [
+        "g2p_ddg2p_url",
+        "clingen_dosage_grch38_url",
+        "panelapp_panels_url"
+      ],
       "release": [
         {
           "kind": "http",
@@ -2062,18 +2056,14 @@
     {
       "id": "F7",
       "name": "GOFCARDS_CLINVAR_INJECTION",
-      "calls": [
-        [
-          "gofcards_clinvar_injection_install",
-          "{config}"
-        ]
-      ],
+      "module": "modules/local/install_steps/gofcards_clinvar_injection.nf",
       "needs": [
         "F5",
         "F6"
       ],
-      "copies": [
-        "gofcards_exact_gof_cache"
+      "stage": [
+        "gofcards_exact_gof_cache",
+        "clinvar_vcv_xml"
       ],
       "outputs": [
         "gofcards_exact_gof_cache"
@@ -2086,35 +2076,39 @@
     {
       "id": "F8",
       "name": "GENE_NONLOF_MECHANISM",
-      "calls": [
-        [
-          "gene_nonlof_mechanism_cache_install",
-          "{config}"
-        ]
-      ],
+      "module": "modules/local/install_steps/gene_nonlof_mechanism.nf",
       "needs": [
         "F6",
         "F7"
       ],
+      "stage": [
+        "gofcards_exact_gof_cache",
+        "clinvar_vcv_xml"
+      ],
       "outputs": [
         "gene_nonlof_mechanism_json"
       ],
-      "settings": []
+      "settings": [
+        "g2p_ddg2p_url",
+        "clingen_dosage_grch38_url",
+        "panelapp_panels_url"
+      ]
     },
     {
       "id": "F9",
       "name": "HPO_CONDITION_MECHANISM",
-      "calls": [
-        [
-          "hpo_condition_mechanism_cache_install",
-          "{config}"
-        ]
-      ],
+      "module": "modules/local/install_steps/hpo_condition_mechanism.nf",
       "needs": [
         "F1",
         "F4",
         "F7",
         "D9"
+      ],
+      "stage": [
+        "hpo_assertions",
+        "ddg2p_mechanism_evidence",
+        "gofcards_exact_gof_cache",
+        "gene_dosage_sensitivity"
       ],
       "outputs": [
         "hpo_condition_mechanism_json"
@@ -2127,20 +2121,12 @@
     {
       "id": "F10",
       "name": "HPO_GENE_RANKING",
-      "calls": [
-        [
-          "hpo_gene_ranking_reference_install",
-          "{config}"
-        ]
-      ],
+      "module": "modules/local/install_steps/hpo_gene_ranking.nf",
       "needs": [],
       "outputs": [
         "hpo_gene_ranking_reference_dir"
       ],
-      "settings": [],
-      "priva_commands": [
-        "hpo-gene-ranking"
-      ]
+      "settings": []
     }
   ]
 }

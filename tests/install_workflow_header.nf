@@ -46,8 +46,9 @@ def installWire(String id, plan, List needs) {
 // its plan entry, {key: file name in staged/}, [files to stage]]. It reads the
 // keys its registry entry lists in "stage" from the receipts of the steps it
 // needs (a file shipped in the checkout from this checkout, as install-task
-// run reads it), with their index files, and the files you supply for it
-// (a file that does not exist is left out, and the step says it is missing).
+// run reads it), with their index files and provenance (.provenance.json),
+// and the files you supply for it (a file that does not exist is left out,
+// and the step says it is missing).
 def installNative(String id, plan, List needs, List stage) {
     installWire(id, plan, needs).map { item ->
         def planned = new groovy.json.JsonSlurper().parse(item[2].toFile()).steps[id]
@@ -70,7 +71,7 @@ def installNative(String id, plan, List needs, List stage) {
             if (main.exists()) {
                 names[pair[0]] = main.name
                 files << main
-                ['.fai', '.gzi', '.tbi', '.csi'].each { ext ->
+                ['.fai', '.gzi', '.tbi', '.csi', '.provenance.json'].each { ext ->
                     def index = file(pair[1] + ext)
                     if (index.exists()) files << index
                 }

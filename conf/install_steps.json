@@ -85,14 +85,12 @@
     {
       "id": "A5",
       "name": "NM_TO_ENST",
-      "calls": [
-        [
-          "nm_to_enst_mapping_install",
-          "{config}"
-        ]
-      ],
+      "module": "modules/local/install_steps/nm_to_enst.nf",
       "needs": [],
       "outputs": [
+        "nm_to_enst_tsv"
+      ],
+      "user_inputs": [
         "nm_to_enst_tsv"
       ],
       "settings": [
@@ -849,36 +847,29 @@
     {
       "id": "C6",
       "name": "ALPHAMISSENSE_DOMAIN",
-      "calls": [
-        [
-          "AlphaMissense_stat",
-          "{config}"
-        ]
-      ],
+      "module": "modules/local/install_steps/alphamissense_domain.nf",
       "needs": [
         "C4"
+      ],
+      "stage": [
+        "alphamissense_vep_vcf"
       ],
       "outputs": [
         "alphamissense_pd_stat"
       ],
       "settings": [
         "assembly"
-      ],
-      "priva_commands": [
-        "alphamissense-domain"
       ]
     },
     {
       "id": "C8",
       "name": "INTERPRO_MAPPING",
-      "calls": [
-        [
-          "InterPro_parsing",
-          "{config}"
-        ]
-      ],
+      "module": "modules/local/install_steps/interpro_mapping.nf",
       "needs": [
         "C4"
+      ],
+      "stage": [
+        "alphamissense_vep_vcf"
       ],
       "outputs": [
         "interpro_mapping_pickle"
@@ -1819,17 +1810,18 @@
     {
       "id": "C10",
       "name": "DAS_DOMAINS",
-      "calls": [
-        [
-          "AlphaMissense_pick_intolerant_domains",
-          "{config}"
-        ]
-      ],
+      "module": "modules/local/install_steps/das_domains.nf",
       "needs": [
         "C6",
         "C8",
         "C4",
         "D1"
+      ],
+      "stage": [
+        "alphamissense_pd_stat",
+        "interpro_mapping_pickle",
+        "alphamissense_vep_vcf",
+        "clinvar_vcf"
       ],
       "outputs": [
         "alphamissense_intolerant_domains",
@@ -1838,45 +1830,40 @@
       ],
       "settings": [
         "assembly",
-        "priva_python_hash_seed"
-      ],
-      "priva_commands": [
-        "alphamissense-domain",
-        "alpha-exon-history"
+        "priva_python_hash_seed",
+        "vep_installed_version"
       ]
     },
     {
       "id": "C11",
       "name": "PM1_REGIONS",
-      "calls": [
-        [
-          "prepare_pm1_regions",
-          "{config}"
-        ]
-      ],
+      "module": "modules/local/install_steps/pm1_regions.nf",
       "needs": [
         "C10",
         "C6",
         "A5"
       ],
+      "stage": [
+        "all_intolerant_domains",
+        "nm_to_enst_tsv"
+      ],
       "outputs": [
         "pm1_regions_pkl"
       ],
       "settings": [
-        "assembly"
+        "assembly",
+        "vep_installed_version"
       ]
     },
     {
       "id": "D6",
       "name": "CLINVAR_PATHO_AF",
-      "calls": [
-        [
-          "ClinVar_patho_AF_stat",
-          "{config}"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_patho_af.nf",
       "needs": [
         "D1"
+      ],
+      "stage": [
+        "clinvar_vcf"
       ],
       "outputs": [
         "clinvar_patho_af_stat",
@@ -1889,14 +1876,12 @@
     {
       "id": "D8",
       "name": "CLINVAR_PM5",
-      "calls": [
-        [
-          "ClinVar_PM5_index",
-          "{config}"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_pm5.nf",
       "needs": [
         "D1"
+      ],
+      "stage": [
+        "clinvar_vcf"
       ],
       "outputs": [
         "clinvar_pm5_index"
@@ -1908,14 +1893,12 @@
     {
       "id": "D9",
       "name": "CLINGEN_MAP",
-      "calls": [
-        [
-          "ClinGen_deploy",
-          "{config}"
-        ]
-      ],
+      "module": "modules/local/install_steps/clingen_map.nf",
       "needs": [
         "D1"
+      ],
+      "stage": [
+        "clinvar_vcf"
       ],
       "outputs": [
         "clingen_map",

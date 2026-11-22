@@ -19,6 +19,15 @@
 # Pos, Ref and Alt strings equal the variant's, exactly as upstream compares
 # them. Variants that upstream cannot query (unknown chromosome, position
 # outside the index) still take the upstream code path.
+#
+# 2026-11-14 CT: when PriVA has built a compact copy of the table
+# (TABLE.priva_compact and TABLE.priva_compact.idx, from
+# `priva cadd-prescore-compact build`) and PRIVA_CADD_PRESCORE_BIN names the
+# priva program, this script hands the whole lookup to `priva cadd-prescore`
+# with the same arguments, input and outputs. The compact copy keeps the six
+# columns PriVA reads (#Chrom, Pos, Ref, Alt, FeatureID, PHRED) in small
+# blocks; found rows keep the table's column layout with the other columns
+# empty. Without a matching compact copy the Python lookup below runs.
 
 import sys
 import os
@@ -36,6 +45,27 @@ parser.add_option("--found_out", dest="found_out", help="Write found variants to
 parser.add_option("--header", dest="header", help="Write full header to output (default none)",
                   default=False, action="store_true")
 (options, args) = parser.parse_args()
+
+COMPACT_MAGIC = b"PRIVA-CADD6IDX\x01\x00"
+
+
+def compact_matches(table):
+    """True when TABLE.priva_compact and its index exist and belong to TABLE."""
+    try:
+        with open(table + ".priva_compact.idx", "rb") as stream:
+            head = stream.read(32)
+        return (len(head) == 32 and head[:16] == COMPACT_MAGIC
+                and struct.unpack("<QQ", head[16:32]) == (os.path.getsize(table),
+                                                          os.path.getsize(table + ".priva_compact")))
+    except (IOError, OSError, TypeError, struct.error):
+        return False
+
+
+program = os.environ.get("PRIVA_CADD_PRESCORE_BIN", "")
+if program and options.path and os.access(program, os.X_OK) and compact_matches(options.path):
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.execv(program, [program, "cadd-prescore"] + sys.argv[1:])
 
 if options.input:
     stdin = open(options.input, 'r')

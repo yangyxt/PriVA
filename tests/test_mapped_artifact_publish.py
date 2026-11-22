@@ -12,6 +12,8 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+import fake_priva_binary
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("mapped_publish_test", ROOT / "scripts/mapped_artifact_publish.py")
@@ -286,7 +288,9 @@ if __name__ == "__main__":
         r=Path(a[a.index("--artifact")+1]+".nm_to_enst.json")
         sys.exit(0 if r.exists() and json.loads(r.read_text()).get("scientific_input")==motif_binding() else 1)
 ''')
-        artifact = self.output_dir / ("motifs.pkl" if kind == "motifs" else "pm1.pkl")
+        # The configured PM1 pickle value selects the native archive beside it.
+        artifact = self.output_dir / ("motifs.pkl" if kind == "motifs" else "pm1.rkyv")
+        self.priva = fake_priva_binary.environment(self.folder, scripts=self.scripts)
         source_vcf = self.cache / "input.vcf.gz"
         source_vcf.write_bytes(b"not read by this publication fixture")
         domains = self.cache / "all_intolerant.pkl"
@@ -315,7 +319,10 @@ update_yaml() { [[ ${FAIL_CONFIG_WRITE:-0} != 1 ]] || return 17; python -c 'impo
 yaml_value_or_default() { local v;v=$(read_yaml "$1" "$2"); if [[ $v == null || -z $v ]];then printf '%s\n' "$3";else printf '%s\n' "$v";fi; }
 "$4" "$5"
 '''
-        env = dict(os.environ, PATH=str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"])
+        env = dict(os.environ, PATH=str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"],
+                   # Run the builder as main_install does inside its private view;
+                   # native .rkyv values would otherwise start a private installation.
+                   PRIVA_CACHE_INSTALL_INTERNAL="1", **self.priva)
         return subprocess.run(["bash", "--noprofile", "--norc", "-c", body, "fixture",
             str(ROOT / "scripts/install_utils.sh"), str(self.scripts), str(self.folder), function, str(self.config)],
             env=env, text=True, capture_output=True, timeout=30)
@@ -329,7 +336,18 @@ yaml_value_or_default() { local v;v=$(read_yaml "$1" "$2"); if [[ $v == null || 
                 call = json.loads(self.argv_log.read_text().splitlines()[-1])
                 self.assertEqual(call[call.index("--nm_to_enst_tsv") + 1], str(self.mapping))
                 self.assertEqual("--skip_das" in call, kind == "pm1")
-                self.assertEqual(call[call.index("--threads" if kind == "pm1" else "--processes") + 1], "2")
+                if kind == "pm1":
+                    native = [value for value in fake_priva_binary.calls(self.priva["PRIVA_FAKE_CALLS"])
+                              if value[:2] == ["mapped-artifact", "run"]][-1]
+                    self.assertEqual(native[native.index("--native-producer") + 1], "pm1-regions")
+                    self.assertEqual(native[native.index("--helper-root") + 1], str(self.folder))
+                    self.assertEqual(native[native.index("--") + 1:], [
+                        "--assembly", "hg38", "--nm-to-enst", str(self.mapping),
+                        "--intolerant-domains", str(self.cache / "all_intolerant.pkl"),
+                        "--hcseeker", str(self.anchors[1]), "--rmc", str(self.anchors[0]),
+                        "--output", str(args.artifact)])
+                else:
+                    self.assertEqual(call[call.index("--processes") + 1], "2")
                 self.assertEqual(pickle.loads(args.artifact.read_bytes()), PAYLOAD)
                 before = self.pair(args.artifact), self.argv_log.read_bytes()
                 result = self.wrapper(kind)

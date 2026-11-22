@@ -16,6 +16,8 @@ REFERENCE = ROOT / 'tests/fixtures/installer-054b494/scripts/annotation_vcf.sh'
 HEADER = b'##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n'
 V2_MARKERS = (b'##SpliceAI2Version=2', b'##source=PriVA_SpliceAI2_projection',
               b'##SpliceAI2Policy=annotation_only_no_ACMG_or_CADD_activation')
+# The guard runs priva spliceai-cutoffs; CI sets PRIVA_BINARY after building it.
+PRIVA = os.environ.get('PRIVA_BINARY') or shutil.which('priva')
 
 
 class SpliceAI2RuntimeGuard(unittest.TestCase):
@@ -68,6 +70,9 @@ class SpliceAI2RuntimeGuard(unittest.TestCase):
         self.config.write_text(yaml.safe_dump(self.settings, sort_keys=False))
 
     def run_shell(self, body):
+        if not PRIVA:
+            self.skipTest('needs the priva program: set PRIVA_BINARY')
+        self.env['PRIVA_BINARY'] = os.path.abspath(PRIVA)
         return subprocess.run(['bash', '-c', 'load_script() { source "$1"; }; load_script "$1"; ' + body, 'test', str(self.script)],
                               env=self.env, text=True, capture_output=True)
 

@@ -1,0 +1,6 @@
+695	R-HSA-168256	https://reactome.org/PathwayBrowser/#/R-HSA-168256	Immune System	TAS	Homo sapiens
+3575	R-HSA-1280215	https://reactome.org/PathwayBrowser/#/R-HSA-1280215	Cytokine Signaling in Immune system	TAS	Homo sapiens
+7454	R-HSA-9999999	https://reactome.org/PathwayBrowser/#/R-HSA-9999999	Made-up child pathway	IEA	Homo sapiens
+2312	R-HSA-1474244	https://reactome.org/PathwayBrowser/#/R-HSA-1474244	Extracellular matrix organization	TAS	Homo sapiens
+12229	R-MMU-168256	https://reactome.org/PathwayBrowser/#/R-MMU-168256	Immune System	IEA	Mus musculus
+1080	R-HSA-5678895

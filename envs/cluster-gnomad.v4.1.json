@@ -1,0 +1,296 @@
+{
+  "schema_version": 1,
+  "assembly": "GRCh38",
+  "release": "4.1",
+  "scope": "Original gnomAD joint GRCh38 inputs for PriVA baseline liftover; hg19 liftover and downstream calibration remain separate steps.",
+  "files": [
+    {
+      "path": "gnomad.joint.v4.1.sites.chr1.vcf.bgz",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr1.vcf.bgz",
+      "md5": "11c62331b0a654fce6a9cd43838de648",
+      "bytes": 72058349094
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr1.vcf.bgz.tbi",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr1.vcf.bgz.tbi",
+      "md5": "bfa8b1ca198afccfa348c1949be6670a",
+      "bytes": 225210
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr2.vcf.bgz",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr2.vcf.bgz",
+      "md5": "563a8fe6f148621169b0215ac9f19602",
+      "bytes": 69405591711
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr2.vcf.bgz.tbi",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr2.vcf.bgz.tbi",
+      "md5": "96383a7869a387c75aeffa48a61a3bf6",
+      "bytes": 234997
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr3.vcf.bgz",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr3.vcf.bgz",
+      "md5": "c44f1661bafc15685f1eee593b4886ea",
+      "bytes": 56136246089
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr3.vcf.bgz.tbi",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr3.vcf.bgz.tbi",
+      "md5": "d8de4c5bef2f47788593ad22d5f7cb76",
+      "bytes": 192201
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr4.vcf.bgz",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr4.vcf.bgz",
+      "md5": "e6d438b84539c6adad5bc67d6febb33b",
+      "bytes": 51577294862
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr4.vcf.bgz.tbi",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr4.vcf.bgz.tbi",
+      "md5": "2bbebb0c92ab32fa55bb3b216b520dba",
+      "bytes": 184404
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr5.vcf.bgz",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr5.vcf.bgz",
+      "md5": "d226db0e0055b5e87e72f4b63158664a",
+      "bytes": 49432241926
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr5.vcf.bgz.tbi",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr5.vcf.bgz.tbi",
+      "md5": "c075d1bff18f898a219375b34086384c",
+      "bytes": 174533
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr6.vcf.bgz",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr6.vcf.bgz",
+      "md5": "2820f13a2439ebbdf55066a0c320cdb5",
+      "bytes": 47855591380
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr6.vcf.bgz.tbi",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr6.vcf.bgz.tbi",
+      "md5": "1487e9e8fc4eb818722bdd8daf1ee660",
+      "bytes": 166141
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr7.vcf.bgz",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr7.vcf.bgz",
+      "md5": "d1d50e4fa082246a5787eee76c036189",
+      "bytes": 47527173425
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr7.vcf.bgz.tbi",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr7.vcf.bgz.tbi",
+      "md5": "747174d31d9ddae752c3fe35daf6eabf",
+      "bytes": 153886
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr8.vcf.bgz",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr8.vcf.bgz",
+      "md5": "195f2825e94c9b5e43b34bb2b1ab5c7b",
+      "bytes": 42153161222
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr8.vcf.bgz.tbi",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr8.vcf.bgz.tbi",
+      "md5": "ea170b54493063f0dd71ee93225449c7",
+      "bytes": 140975
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr9.vcf.bgz",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr9.vcf.bgz",
+      "md5": "1c739fb01fd9de816e3fddc958668627",
+      "bytes": 37782491126
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr9.vcf.bgz.tbi",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr9.vcf.bgz.tbi",
+      "md5": "5308d40eea1b5b3c1bfafc18405ecc39",
+      "bytes": 118765
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr10.vcf.bgz",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr10.vcf.bgz",
+      "md5": "e2f174f150b5d709d5d7349ac241c438",
+      "bytes": 39173194295
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr10.vcf.bgz.tbi",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr10.vcf.bgz.tbi",
+      "md5": "338c83b4809998120cd07a2d6665d932",
+      "bytes": 129568
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr11.vcf.bgz",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr11.vcf.bgz",
+      "md5": "b8651f2e5a0aafa23d7fc3406b35bc69",
+      "bytes": 42727676736
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr11.vcf.bgz.tbi",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr11.vcf.bgz.tbi",
+      "md5": "92c00a8773a26954b5a5836ecb105917",
+      "bytes": 129925
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr12.vcf.bgz",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr12.vcf.bgz",
+      "md5": "62795bafd326eae566ef49781a26bc91",
+      "bytes": 41368811104
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr12.vcf.bgz.tbi",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr12.vcf.bgz.tbi",
+      "md5": "8c968309a33548e5086e5f7eaf7d9e62",
+      "bytes": 129388
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr13.vcf.bgz",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr13.vcf.bgz",
+      "md5": "92244327bee6d45973f6077a8134ccd9",
+      "bytes": 25601580940
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr13.vcf.bgz.tbi",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr13.vcf.bgz.tbi",
+      "md5": "6597b0cab55d95977d44b9b9e1a45781",
+      "bytes": 94423
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr14.vcf.bgz",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr14.vcf.bgz",
+      "md5": "f7a8344b03a4162cb71cdb628dd1e15b",
+      "bytes": 27726969796
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr14.vcf.bgz.tbi",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr14.vcf.bgz.tbi",
+      "md5": "5d1aeb3273b10e8d20dac541791bfdd7",
+      "bytes": 87348
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr15.vcf.bgz",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr15.vcf.bgz",
+      "md5": "40c8ab829f973688d2ef891ce5acabb7",
+      "bytes": 27468228520
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr15.vcf.bgz.tbi",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr15.vcf.bgz.tbi",
+      "md5": "a3ee5b5ae8a61112b1296f9f699b363e",
+      "bytes": 81499
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr16.vcf.bgz",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr16.vcf.bgz",
+      "md5": "58a5f920fc191b2069126c41278cc077",
+      "bytes": 31636107756
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr16.vcf.bgz.tbi",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr16.vcf.bgz.tbi",
+      "md5": "541be851082c6f31a7314b8f29bb88a0",
+      "bytes": 80355
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr17.vcf.bgz",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr17.vcf.bgz",
+      "md5": "aa48657f45d8db7711c69fbf71a25cdc",
+      "bytes": 31824621474
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr17.vcf.bgz.tbi",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr17.vcf.bgz.tbi",
+      "md5": "ca1a6fcdf3efd4cd2a6a20f6a63a3827",
+      "bytes": 79876
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr18.vcf.bgz",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr18.vcf.bgz",
+      "md5": "80dd729bc61be464c964d3a3bfb0f41a",
+      "bytes": 20491921802
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr18.vcf.bgz.tbi",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr18.vcf.bgz.tbi",
+      "md5": "1c26b24ecf796b2dc88b09244e9771f2",
+      "bytes": 73364
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr19.vcf.bgz",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr19.vcf.bgz",
+      "md5": "1853ca4993ceb25bd6f3a4554173f7cf",
+      "bytes": 29062851139
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr19.vcf.bgz.tbi",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr19.vcf.bgz.tbi",
+      "md5": "cffdd6727172b2d901d6c78221042980",
+      "bytes": 56386
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr20.vcf.bgz",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr20.vcf.bgz",
+      "md5": "09263d3c29b822760c61607c6398f5c4",
+      "bytes": 19445547170
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr20.vcf.bgz.tbi",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr20.vcf.bgz.tbi",
+      "md5": "9ebee6016cc84bf41e0306b303121b63",
+      "bytes": 60121
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr21.vcf.bgz",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr21.vcf.bgz",
+      "md5": "2ec2d9876d61fc9c5b1e84ab6841b62e",
+      "bytes": 11848216707
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr21.vcf.bgz.tbi",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr21.vcf.bgz.tbi",
+      "md5": "7f45e4c5006c22ed81bfafa6d98f691c",
+      "bytes": 37540
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr22.vcf.bgz",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr22.vcf.bgz",
+      "md5": "df15a5ea8ae2e3090eae112f548c74ef",
+      "bytes": 15647905506
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chr22.vcf.bgz.tbi",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr22.vcf.bgz.tbi",
+      "md5": "35b4afe3ded057b254cb77ec2d7bf830",
+      "bytes": 37936
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chrX.vcf.bgz",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chrX.vcf.bgz",
+      "md5": "a5288ced0c2fe893fcfae4d2022b9cd9",
+      "bytes": 38108890197
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chrX.vcf.bgz.tbi",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chrX.vcf.bgz.tbi",
+      "md5": "38caf7baf9cbf202aa1442e2e1330637",
+      "bytes": 147872
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chrY.vcf.bgz",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chrY.vcf.bgz",
+      "md5": "7b882f00919d582139acbc116a7a559f",
+      "bytes": 815223821
+    },
+    {
+      "path": "gnomad.joint.v4.1.sites.chrY.vcf.bgz.tbi",
+      "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chrY.vcf.bgz.tbi",
+      "md5": "de31a66ef70abf371a3fcd1466646705",
+      "bytes": 14615
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+DB Class Key	Common Organism Name	NCBI Taxon ID	Symbol	EntrezGene ID	Mouse MGI ID	HGNC ID	OMIM Gene ID	Genetic Location	Genome Coordinates (mouse: GRCm39 human: GRCh38)	Nucleotide RefSeq IDs	Protein RefSeq IDs	SWISS_PROT IDs
+1001	mouse, laboratory	10090	Btk	12229	MGI:88216			X				
+1001	human	9606	BTK	695		HGNC:1133	300300	X				
+1002	mouse, laboratory	10090	Cd19	12478	MGI:88217			7				
+1002	human	9606	CD19	930		HGNC:1633	107265	16				
+1002	human	9606										

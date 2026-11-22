@@ -11,6 +11,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+import fake_priva_binary
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -220,12 +222,15 @@ python() {
         [[ $2 != fetch ]] || return 73
     else "$TEST_PYTHON" "$@"; fi
 }
+# The fixture priva runs each script through `python` in a new Bash.
+export -f python
 nm_to_enst_mapping_install "$TEST_CONFIG"
 '''
                 result = subprocess.run(['bash', '--noprofile', '--norc', '-c', script,
                                          'fixture', str(ROOT / 'scripts/install_utils.sh')],
                                         env=dict(os.environ, TEST_PYTHON=sys.executable, TEST_SOURCE=str(self.checkout),
-                                                 TEST_CONFIG=str(path), TEST_EVENTS=str(events)),
+                                                 TEST_CONFIG=str(path), TEST_EVENTS=str(events),
+                                                 **fake_priva_binary.environment(self.folder)),
                                         text=True, capture_output=True, timeout=30)
                 self.assertNotEqual(result.returncode, 0)
                 argv, = json.loads(events.read_text())

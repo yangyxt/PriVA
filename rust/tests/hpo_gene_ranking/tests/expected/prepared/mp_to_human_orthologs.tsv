@@ -1,0 +1,6 @@
+mp_id	mouse_mgi_marker_id	mouse_gene_symbol	mouse_entrez_gene_id	human_gene_symbol	human_entrez_gene_id	hgnc_id	omim_gene_id	homology_class_key	pubmed_ids	mgi_genotype_id	source
+MP:0002491	MGI:88216	Btk	12229	BTK	695	HGNC:1133	300300	1001	12345	MGI:2	MGI_GenePheno+HOM_MouseHumanSequence
+MP:0002491	MGI:88217	Cd19	12478	CD19	930	HGNC:1633	107265	1002	222	MGI:4	MGI_GenePheno+HOM_MouseHumanSequence
+MP:0002491	MGI:88217	Cd19	12478					1002	222	MGI:4	MGI_GenePheno+HOM_MouseHumanSequence
+MP:0002491	MGI:88217	Cd19	12478	CD19	930	HGNC:1633	107265	1002	111	MGI:5	MGI_GenePheno+HOM_MouseHumanSequence
+MP:0002491	MGI:88217	Cd19	12478					1002	111	MGI:5	MGI_GenePheno+HOM_MouseHumanSequence

@@ -14,7 +14,12 @@ import gzip
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import fake_priva_binary  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -88,7 +93,8 @@ def _cache(variants: dict | None = None, *, metadata: dict | None = None,
 
 def _validate(path: Path, *provenance: str) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
-    env.update({"PRIVA_INSTALL_UTILS": str(INSTALL_UTILS), "GOFCARDS_CACHE": str(path)})
+    env.update({"PRIVA_INSTALL_UTILS": str(INSTALL_UTILS), "GOFCARDS_CACHE": str(path),
+                "PRIVA_BINARY": str(fake_priva_binary.install(path.parent))})
     return subprocess.run(
         ["bash", "-c",
          'source "$PRIVA_INSTALL_UTILS" >/dev/null; '

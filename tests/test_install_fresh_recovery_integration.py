@@ -21,6 +21,8 @@ import unittest
 
 import yaml
 
+import fake_priva_binary
+
 
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "scripts/installer_prerequisites.py"
@@ -252,6 +254,9 @@ class ManualInputIntegration(unittest.TestCase):
         # preparation, VEP, or main installation occurs in this test.
         script = r'''
 source "$1"
+# Manual-input boundaries must not bootstrap the native CLI.
+priva_cache_install_begin() { PRIVA_CACHE_INSTALL_BUILD_CONFIG=$2; }
+priva_cache_install_finish() { :; }
 priva_install_basic_paths() { printf 'BOUNDARY:basic\n'; PRIVA_INSTALL_TMPDIR="$TEST_FOLDER"; }
 conda_install_vep() { printf 'BOUNDARY:environment\n'; PRIVA_INSTALL_ENV_NAME=priva_acmg; }
 python() { "$TEST_PYTHON" "$@"; }
@@ -260,8 +265,10 @@ reference_genome_install() { printf 'UNEXPECTED_REFERENCE\n'; return 99; }
 VEP_plugins_install() { printf 'UNEXPECTED_WHOLE_TABLE_VEP\n'; return 99; }
 main_install "$TEST_CONFIG"
 '''
+        # The manual-input check runs through priva; the fixture runs the script.
         return subprocess.run(["bash", "--noprofile", "--norc", "-c", script, "fixture", str(INSTALLER)],
-                              env=self.env, capture_output=True, text=True, timeout=20)
+                              env=dict(self.env, **fake_priva_binary.environment(self.folder)),
+                              capture_output=True, text=True, timeout=20)
 
     def test_main_missing_manual_stops_after_environment_before_prepare(self):
         before = self.config.read_bytes()
@@ -341,7 +348,8 @@ class LocalHttpMaveDBRecovery(unittest.TestCase):
                     "vep_plugins_cachedir": str(cache)})
                 config.write_text(text)
                 env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", TMPDIR=str(folder),
-                           PRIVA_INSTALL_INSPECT_ROOTS=os.pathsep.join((str(ROOT), str(folder))))
+                           PRIVA_INSTALL_INSPECT_ROOTS=os.pathsep.join((str(ROOT), str(folder))),
+                           **fake_priva_binary.environment(folder))
                 command = ["bash", "--noprofile", "--norc", "-c",
                            'source "$1"; MaveDB_install "$2" "$3"',
                            "fixture", str(INSTALLER), str(config), str(cache)]
@@ -379,6 +387,8 @@ class LocalHttpMaveDBRecovery(unittest.TestCase):
                 self.assertEqual(third.returncode, 0, third.stderr + third.stdout)
                 self.assertEqual(state["requests"], requests)
                 self.assertEqual((target.stat().st_ino, target.stat().st_mtime_ns, target.read_bytes()), identity)
+                self.assertEqual(fake_priva_binary.calls(env["PRIVA_FAKE_CALLS"])[-1],
+                                 ["indexed-plugin-cache", "ensure-index", "--input", str(target), "--kind", "mavedb"])
             finally:
                 server.shutdown()
                 thread.join(timeout=5)

@@ -1,0 +1,8 @@
+go_id	aspect	gene_symbol	db	db_object_id	db_object_name	db_object_type	evidence_code	reference	with_or_from	taxon	source
+GO:0002376	P	BTK	UniProtKB	Q06187	Tyrosine-protein kinase BTK	protein	IDA	PMID:1		taxon:9606	GOA_human_gaf
+GO:0002376	P	BTK	UniProtKB	Q06187	protein	protein	IMP	PMID:1		taxon:9606	GOA_human_gaf
+GO:0002376	P	STAT3	UniProtKB	P40763	"Signal ""transducer"" 3"	protein	IEA	PMID:1		taxon:9606	GOA_human_gaf
+GO:0002376	P	PDL1ALIAS	UniProtKB	Q9NZQ7	protein	protein	IMP	PMID:1		taxon:9606	GOA_human_gaf
+GO:0002376	P	IL6	UniProtKB	P05231	protein	protein	TAS	PMID:1		taxon:9606	GOA_human_gaf
+GO:0002376	P	UNMAPPED	UniProtKB	Q99999	protein	protein	EXP	PMID:1		taxon:9606	GOA_human_gaf
+GO:0000001	P	TP53	UniProtKB	P04637	protein	protein	IDA	PMID:1		taxon:9606	GOA_human_gaf

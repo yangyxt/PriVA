@@ -25,7 +25,10 @@ FILES = {
 }
 # Git blob IDs of earlier PriVA copies. When a copy changes, add the ID of the
 # version it replaces, so installed copies of that version are updated too.
-PREVIOUS = set()
+PREVIOUS = {
+    # extract_scored.py before the hand-off to priva cadd-prescore (2026-11-14)
+    "39f97b5b877bf04486fcb5e1accc8c62eb0214c7",
+}
 
 
 def blob_id(payload):

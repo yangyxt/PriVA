@@ -1345,6 +1345,62 @@ Changes you can notice:
   more: C4's code reaches `priva task step` (which gained `vep-worker`), D0's
   reaches `clinvar-gene-refresh` (which gained `due`).
 
+Part 5 moves CADD (E1). With it no install step runs installer functions:
+every step is its own process, and `install_utils.sh` is left only for
+`main_install` and the cluster scripts (phase 7).
+
+```mermaid
+flowchart LR
+  conda["scripts/cadd_conda.py install<br/>a conda for CADD's Snakemake, or<br/>data/CADD/conda_frontend made with<br/>micromamba, mamba or conda"] --> zip
+  zip["curl + unzip:<br/>CADD-scripts release"] --> anno["curl + md5sum + tar:<br/>GENOME_v1.7 annotations"]
+  anno --> pre["curl + md5sum:<br/>prescored SNV and indel tables<br/>and their .tbi"]
+  pre --> priva["cadd_scripts_install.py<br/>cadd_prescore_index.py build<br/>priva cadd-prescore-compact build"]
+  priva --> check["CADD.sh -a -m -g GENOME on test/input.vcf.gz<br/>= test/output_inclAnno_GENOME (variants, PHRED)"]
+  check --> rec["record cadd_base_dir"]
+```
+
+| Step | Commands in the process |
+| --- | --- |
+| E1 | `python scripts/cadd_conda.py install --frontend-prefix data/CADD/conda_frontend --manager M` (M: the first of `MAMBA_EXE`, `micromamba`, `mamba`, `CONDA_EXE`, `conda`); `curl` of `cadd_zip_download_url`, `unzip`; `curl` of the annotations, `md5sum`, `tar -xzf`; `curl` of each prescored table and its index, `md5sum`; `python scripts/cadd_scripts_install.py`; per table `python scripts/cadd_prescore_index.py build` and `priva cadd-prescore-compact build`; `python scripts/cadd_conda.py check`, then `CADD.sh -c CPUS -a -m -g GENOME` on its test input, its variants and PHRED compared with the expected output (the commands of `CADD_conda_install`, `CADD_install` and `CADD_upstream_check`) |
+
+Conda environments name their own folder in their files and cannot be
+moved, so E1 does not build in its task folder for storeDir to move: it
+builds in its step folder (`resource_root/E1/LINEAGE/data`, linked into the
+task as `data/`), as `install-task run` did, and storeDir keeps only
+`receipt.json`. The CADD annotation finds the frontend beside
+`cadd_base_dir` (`data/CADD/conda_frontend`), and CADD adds its rule
+environments and MMSplice's exon tables to the folder when it runs, so the
+folder stays writable (registry `writable`).
+
+Compared with the shell functions (`tests/install_fixtures.py cadd` writes
+the release zip, with a stand-in `CADD.sh` that needs conda and writes the
+expected test output, and with `--upstream` the reviewed upstream
+`extract_scored.py` and `MMSplice.py` of CADD-scripts v1.7.2, which PriVA
+replaces; the annotations and prescored tables of both assemblies; their
+MD5s as configuration keys; a conda new enough for CADD, and a micromamba
+that makes the frontend):
+
+| Step | Cases compared | Result |
+| --- | --- | --- |
+| E1 | GRCh38 and GRCh37 with a conda on PATH; GRCh38 with only micromamba (both make the frontend) | the same CADD-scripts folder (scripts, PriVA's two replaced files, annotations, tables and their indexes, compact copies, the rule environments' marker), apart from the position indexes (`.posidx`): their checkpoints are every fourth block of each part the table is read in, and the parts follow the threads (the old route had 2, the new task 1). Indexed again with 2 threads, the new tables give the old route's bytes, and lookups through either index find the same rows |
+| E1 | a wrong MD5 for the SNV table; no micromamba, mamba or conda | each stops both routes with the same reason |
+
+Changes you can notice:
+
+- E1 always downloads into its own new folder. The function reused a
+  `cadd_base_dir` you set, a release already unpacked under
+  `cadd_parent_dir`, and any download already in place; adopt an existing
+  CADD with `--adopt`.
+- The downloads use `curl` (the function used `wget -c` when it was
+  installed, to resume a stopped download from `.part`); a failed task starts
+  again in a new folder.
+- The threads of the index and compact builds and of `CADD.sh -c` are the
+  task's CPUs, not the configuration's `threads`; `CADD.sh`'s check keeps its
+  temporary files in the task folder, not `tmp_dir`.
+- `install_workflow_check.py` no longer writes the include of `INSTALL_STEP`
+  into `workflows/install.nf` (no step uses it), and counts the shell part of
+  the digest with the code that goes in phase 7.
+
 ### Phases 3 to 7
 
 | Phase | Scope | Shell glue now | Python it still runs | Work (tools keep their commands) |
@@ -1352,7 +1408,7 @@ Changes you can notice:
 | 3 | Downloads: A1, A4, A5, B1, B2, B3, B5, B6, B7, B8, B9, D0, F1 | 4 to 10 functions each | `alternative_start_codon.py` (A4) | Each a Nextflow process: curl or git, then `priva install-task record` for the receipt. Done for A1, A4, B1, B2, B3, B5, B6, B7, B8, B9 and F1 (above); A4 no longer runs `alternative_start_codon.py`, whose pickle the Rust detector never reads |
 | 4 | Pipeline scripts: `annotation_vcf.sh` (1,827 lines), `filtration_vcf_per_fam.sh` (356), `prioritization_vcf_per_fam.sh` (430), `common_bash_utils.sh` (1,627) | run inside every analysis task | an inline `python - <<PY` block in `anno_VEP_cache_worker`, and `cadd_conda.py` (finds CADD's conda) | The annotation, filtration and prioritization tasks already exist per step; each runs VEP, bcftools, `CADD.sh` and `priva` with their own command lines instead of a shell function. `priva task run` keeps the task's checks and runs them, since which commands run depends on the settings. Done (above) for filtration, the prioritization steps and the six annotation steps; the scripts stay for the installer and `--phase annotation` until phase 6 |
 | 5 | Steps on native builders: A5 (moved from phase 3), C6, C8, C10, C11, D6, D8, D9, F4 to F10 | 7 to 19 functions each | `protein_domain_mapping.py` (C8's rebuild) | Each a process; F4's acquisition is curl and `priva gene-mechanism prepared`. Done (above), except F5's rebuild, which needs A2's two VEP caches and moves to phase 6 |
-| 6 | Heavy chains: A2, B4, C1, C3, C4, D0 (moved from phase 3), D1, E1, and F5's rebuild. Done (above): C1_chr*, C1, D0, A2, B4, C3, C4, D1_split, D1_chr* and D1 | 13 to 49 functions each | `cadd_scripts_install.py`, `cadd_prescore_index.py` (kept: they belong to CADD) | VEP, bcftools, CrossMap and `CADD.sh` command lines in the process; one change per step |
+| 6 | Heavy chains: A2, B4, C1, C3, C4, D0 (moved from phase 3), D1, E1, and F5's rebuild. Done (above): C1_chr*, C1, D0, A2, B4, C3, C4, D1_split, D1_chr*, D1 and E1 | 13 to 49 functions each | `cadd_scripts_install.py`, `cadd_prescore_index.py` (kept: they belong to CADD) | VEP, bcftools, CrossMap and `CADD.sh` command lines in the process; one change per step |
 | 7 | Remove the shell installer | `main_install`, `install_cluster.sh`, the `*.sbatch` scripts | | Delete `install_utils.sh` and the bash part of the digest |
 
 All seven phases are finished and checked end to end on the migration branch before any of it goes to `main`.

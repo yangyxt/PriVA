@@ -11,8 +11,7 @@
 // the steps after it only when that step's results changed.
 
 include { INSTALL_RELEASE; INSTALL_PLAN; INSTALL_PREFLIGHT; INSTALL_PUBLISH } from '../modules/local/install'
-include { @INCLUDES@ } from '../modules/local/install'
-@PROCESS_INCLUDES@
+@INCLUDES@@PROCESS_INCLUDES@
 
 def installSha(String text) {
     java.security.MessageDigest.getInstance('SHA-256').digest(text.getBytes('UTF-8')).encodeHex().toString()

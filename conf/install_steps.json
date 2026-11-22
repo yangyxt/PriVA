@@ -2227,22 +2227,7 @@
     {
       "id": "E1",
       "name": "CADD",
-      "calls": [
-        [
-          "CADD_conda_install",
-          "--config",
-          "{config}"
-        ],
-        [
-          "CADD_install",
-          "{config}",
-          "{assembly}"
-        ],
-        [
-          "CADD_upstream_check",
-          "{config}"
-        ]
-      ],
+      "module": "modules/local/install_steps/cadd.nf",
       "needs": [],
       "outputs": [
         "cadd_base_dir"

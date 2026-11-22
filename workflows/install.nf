@@ -11,7 +11,6 @@
 // the steps after it only when that step's results changed.
 
 include { INSTALL_RELEASE; INSTALL_PLAN; INSTALL_PREFLIGHT; INSTALL_PUBLISH } from '../modules/local/install'
-include { INSTALL_STEP as STEP_E1_CADD } from '../modules/local/install'
 include { REFERENCE_FASTA as STEP_A1_REFERENCE_FASTA } from '../modules/local/install_steps/reference_fasta'
 include { VEP_CACHE as STEP_A2_VEP_CACHE } from '../modules/local/install_steps/vep_cache'
 include { CDS_FASTA as STEP_A4_CDS_FASTA } from '../modules/local/install_steps/cds_fasta'
@@ -87,6 +86,7 @@ include { PM1_REGIONS as STEP_C11_PM1_REGIONS } from '../modules/local/install_s
 include { CLINVAR_PATHO_AF as STEP_D6_CLINVAR_PATHO_AF } from '../modules/local/install_steps/clinvar_patho_af'
 include { CLINVAR_PM5 as STEP_D8_CLINVAR_PM5 } from '../modules/local/install_steps/clinvar_pm5'
 include { CLINGEN_MAP as STEP_D9_CLINGEN_MAP } from '../modules/local/install_steps/clingen_map'
+include { CADD as STEP_E1_CADD } from '../modules/local/install_steps/cadd'
 include { HPO_MONDO as STEP_F1_HPO_MONDO } from '../modules/local/install_steps/hpo_mondo'
 include { GENE_PATHOGENIC_MECHANISM as STEP_F4_GENE_PATHOGENIC_MECHANISM } from '../modules/local/install_steps/gene_mechanism'
 include { GOFCARDS_EXACT_GOF as STEP_F5_GOFCARDS_EXACT_GOF } from '../modules/local/install_steps/gofcards_exact_gof'
@@ -256,7 +256,7 @@ workflow INSTALL_RESOURCES {
     STEP_D6_CLINVAR_PATHO_AF(installNative('D6', plan, [STEP_D1_CLINVAR.out.receipt], ['clinvar_vcf']))
     STEP_D8_CLINVAR_PM5(installNative('D8', plan, [STEP_D1_CLINVAR.out.receipt], ['clinvar_vcf']))
     STEP_D9_CLINGEN_MAP(installNative('D9', plan, [STEP_D1_CLINVAR.out.receipt], ['clinvar_vcf']))
-    STEP_E1_CADD(installWire('E1', plan, []))
+    STEP_E1_CADD(installNative('E1', plan, [], []))
     STEP_F1_HPO_MONDO(installNative('F1', plan, [], []))
     STEP_F4_GENE_PATHOGENIC_MECHANISM(installNative('F4', plan, [STEP_F1_HPO_MONDO.out.receipt], ['mondo_disease_scope_registry']))
     STEP_F5_GOFCARDS_EXACT_GOF(installNative('F5', plan, [], []))

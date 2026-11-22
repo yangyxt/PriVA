@@ -42,7 +42,9 @@ def render() -> str:
                 raise SystemExit(f"{s['id']}: {s['module']} defines no process {process(s)}")
         elif s.get("stage") or s.get("process"):
             raise SystemExit(f"{s['id']}: only a step with a module stages files or names a process")
-    include = "; ".join(f"INSTALL_STEP as {alias(s)}" for s in steps if "module" not in s)
+    # The steps that still run installer functions (install-task run), if any.
+    shell = "; ".join(f"INSTALL_STEP as {alias(s)}" for s in steps if "module" not in s)
+    include = f"include {{ {shell} }} from '../modules/local/install'\n" if shell else ""
     modules = "\n".join(
         f"include {{ {process(s)} as {alias(s)} }} from '../{s['module'][:-len('.nf')]}'"
         for s in steps if "module" in s)
@@ -84,10 +86,13 @@ RUN_ENTRIES = {"main_workflow", "anno_VEP_data"}
 # as its own process, and clinvar-gene-refresh install, deploy and the
 # candidate receipts, for ClinVar_install, which no step calls since D1 runs as
 # its own process. It names installer functions to fingerprint their text or
-# runs them from the shell, and goes with install_utils.sh in phase 7.
+# runs them from the shell, and goes with install_utils.sh in phase 7. So does
+# the shell part of install-task's digest (rust/src/install_task/digest.rs),
+# which names log, echo and printf to read the text of a step's installer
+# functions: since CADD (E1) runs as its own process, no step has any.
 SHELL_ONLY = {"rust/src/alpha_annotation_base/profile.rs", "rust/src/alpha_annotation_base/publication.rs",
               "rust/src/clinvar_gene_refresh/deploy.rs", "rust/src/clinvar_gene_refresh/profile.rs",
-              "rust/src/clinvar_gene_refresh/refresh.rs"}
+              "rust/src/clinvar_gene_refresh/refresh.rs", "rust/src/install_task/digest.rs"}
 WORD = r"[A-Za-z_][A-Za-z0-9_]*"
 
 

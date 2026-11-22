@@ -73,6 +73,16 @@ and the like), so the steps that read them can be compared both ways:
       pins by SHA-256) the chr1 shards hold scores inside two genes and the
       manifest pins a GENCODE 48 GTF, scored regions, a GENCODE 50 GTF that
       renames one gene, and the plugin, so the preparation completes.
+  python3 tests/install_fixtures.py cadd --out DIR [--upstream FOLDER]
+      DIR/net/HOST/PATH: the CADD-scripts release zip (a stand-in CADD.sh
+      that needs conda and writes the expected test output, its test files,
+      and with --upstream the reviewed upstream extract_scored.py and
+      MMSplice.py that PriVA replaces), the genome annotations and the
+      prescored SNV and indel tables (bgzipped, tabix-indexed) of both
+      assemblies, at the URLs of config.yaml; DIR/cadd.yaml: their MD5s as
+      configuration keys; DIR/envs/conda/bin: a conda new enough for CADD;
+      DIR/envs/micromamba/bin: a micromamba that makes CADD's conda frontend
+      (the CADD step, E1).
   python3 tests/install_fixtures.py ranking --out DIR
       DIR/net/HOST/PATH: the public inputs of the HPO gene ranking (F10), the
       small made-up files of rust/tests/hpo_gene_ranking, compressed as the
@@ -1048,15 +1058,152 @@ def write_vep_inputs(out: Path):
     print(receipts)
 
 
+# Upstream CADD.sh runs Snakemake, whose rule environments need conda on PATH.
+# This one only checks for conda, notes in envs/ that the environments were
+# made (the step folder stays writable for them) and writes the expected test
+# output of the -g genome to -o.
+CADD_SH = """#!/bin/sh
+set -e
+here=$(cd "$(dirname "$0")" && pwd)
+command -v conda > /dev/null || { echo "CADD.sh: conda is not on PATH" >&2; exit 1; }
+genome=GRCh38 output=
+while getopts "c:g:o:v:amdpqh" option; do
+    case $option in g) genome=$OPTARG ;; o) output=$OPTARG ;; esac
+done
+shift $((OPTIND - 1))
+[ -f "$1" ] && [ -n "$output" ] || { echo "CADD.sh: no input or output" >&2; exit 1; }
+mkdir -p "$here/envs"
+: > "$here/envs/$genome.created"
+cp "$here/test/output_inclAnno_$genome.tsv.gz" "$output"
+"""
+
+# conda's answers to what scripts/cadd_conda.py asks (version, info, config):
+# its prefix is the folder above its bin/.
+CONDA = """#!/bin/sh
+prefix=$(cd "$(dirname "$0")/.." && pwd)
+case "$1" in
+    --version) echo "conda 24.9.2" ;;
+    info) printf '{"platform": "linux-64", "conda_prefix": "%s"}\\n' "$prefix" ;;
+    config) echo '{"get": {}, "rc_path": "", "success": true, "warnings": []}' ;;
+    *) exit 0 ;;
+esac
+"""
+
+# micromamba create --yes --prefix PREFIX ... conda=24.9.2: the frontend
+# scripts/cadd_conda.py makes when no usable conda is found.
+MICROMAMBA = """#!/bin/sh
+[ "$1" = create ] || exit 0
+while [ $# -gt 0 ]; do [ "$1" = --prefix ] && prefix=$2; shift; done
+mkdir -p "$prefix/bin"
+cp "$(dirname "$0")/conda.template" "$prefix/bin/conda"
+chmod 755 "$prefix/bin/conda"
+: > "$prefix/bin/activate"
+"""
+
+
+def cadd_table(genome: str, kind: str) -> str:
+    """A prescored table: CADD's two header lines and enough rows for
+    several BGZF blocks, on chromosomes 1 and 2."""
+    lines = [f"## CADD {genome}-v1.7 (c) fixture", "#Chrom\tPos\tRef\tAlt\tType\tLength\tFeatureID\tRawScore\tPHRED"]
+    for chrom in ("1", "2"):
+        for n in range(1500):
+            pos = 10000 + n * 7
+            alt, length = ("CT", 1) if kind == "indel" else ("T", 0)
+            for feature in ("ENST00000000001", "ENST00000000002"):
+                lines.append(f"{chrom}\t{pos}\tC\t{alt}\t{'INS' if kind == 'indel' else 'SNV'}\t{length}\t"
+                             f"{feature}\t{(n % 97) / 10:.6f}\t{(n % 43) / 2:.3f}")
+    return "\n".join(lines) + "\n"
+
+
+def write_cadd(out: Path, upstream=None):
+    root = Path(__file__).resolve().parents[1]
+    import yaml
+    config = yaml.safe_load((root / "config.yaml").read_text())
+    net = out / "net"
+    served = lambda url: net / url.split("://", 1)[1]
+    keys = {}
+
+    def publish(url: str, data: bytes, key=None):
+        path = served(url)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        if key:
+            keys[key] = hashlib.md5(data).hexdigest()
+        return path
+
+    # The CADD-scripts release: CADD.sh, its test input and expected
+    # outputs, and the two files PriVA replaces (the reviewed upstream bytes
+    # from UPSTREAM, else other text, which cadd_scripts_install.py leaves).
+    folder = "CADD-scripts-1.7.2"
+    test_rows = "\n".join(f"{c}\t{p}\tC\tT\t0.{p % 9}12\t{p % 31}.5" for c, p in (("1", 10000), ("2", 10007))) + "\n"
+    files = {
+        "CADD.sh": (CADD_SH.encode(), 0o755),
+        "test/input.vcf.gz": (gzip.compress(b"##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+                                            b"1\t10000\t.\tC\tT\t.\t.\t.\n2\t10007\t.\tC\tT\t.\t.\t.\n", mtime=0), 0o644),
+    }
+    for genome in ("GRCh37", "GRCh38"):
+        files[f"test/output_inclAnno_{genome}.tsv.gz"] = (gzip.compress(
+            f"## CADD {genome}-v1.7\n#Chrom\tPos\tRef\tAlt\tRawScore\tPHRED\n{test_rows}".encode(), mtime=0), 0o644)
+    for relative in ("src/scripts/extract_scored.py", "src/scripts/lib/tools/MMSplice.py"):
+        source = Path(upstream) / Path(relative).name if upstream else None
+        files[relative] = (source.read_bytes() if source else b"# not the reviewed upstream file\n", 0o644)
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as bundle:
+        for relative, (data, mode) in sorted(files.items()):
+            info = zipfile.ZipInfo(f"{folder}/{relative}", date_time=(2024, 1, 1, 0, 0, 0))
+            info.external_attr = (0o100000 | mode) << 16
+            bundle.writestr(info, data)
+    publish(config["cadd_zip_download_url"], archive.getvalue())
+
+    # Per assembly: the genome annotations (a folder named GENOME_v1.7, with
+    # MMSplice's exon-table folder for GRCh38) and both prescored tables with
+    # their tabix indexes.
+    work = out / "build"
+    for genome in ("GRCh37", "GRCh38"):
+        anno = work / genome / f"{genome}_v1.7"
+        (anno / "reference").mkdir(parents=True, exist_ok=True)
+        (anno / "reference" / "README").write_text(f"CADD {genome} annotations (fixture)\n")
+        if genome == "GRCh38":
+            (anno / "mmsplice").mkdir(exist_ok=True)
+        tarball = work / genome / "anno.tar.gz"
+        subprocess.run(["tar", "--sort=name", "--mtime=2024-01-01", "--owner=0", "--group=0", "-czf", tarball,
+                        "-C", anno.parent, anno.name], check=True)
+        publish(config[f"cadd_{genome}_anno_url"], tarball.read_bytes(), f"cadd_{genome}_anno_md5")
+        for kind in ("snv", "indel"):
+            url = config[f"cadd_{genome}_{kind}_anno_url"]
+            plain = work / genome / f"{kind}.tsv"
+            plain.write_text(cadd_table(genome, kind))
+            subprocess.run(["bgzip", "-f", plain], check=True)
+            subprocess.run(["tabix", "-f", "-s", "1", "-b", "2", "-e", "2", "-c", "#", f"{plain}.gz"], check=True)
+            publish(url, Path(f"{plain}.gz").read_bytes(), f"cadd_{genome}_{kind}_anno_md5")
+            publish(f"{url}.tbi", Path(f"{plain}.gz.tbi").read_bytes(), f"cadd_{genome}_{kind}_anno_tbi_md5")
+    shutil.rmtree(work)
+    (out / "cadd.yaml").write_text("".join(f"{key}: \"{value}\"\n" for key, value in sorted(keys.items())))
+
+    # Two environments: one with a conda new enough for CADD's Snakemake,
+    # one with only micromamba, from which the frontend is made.
+    for name, scripts in (("conda", {"conda": CONDA}), ("micromamba", {"micromamba": MICROMAMBA, "conda.template": CONDA})):
+        tools = out / "envs" / name / "bin"
+        tools.mkdir(parents=True, exist_ok=True)
+        (tools / "activate").write_text("")
+        for script, text in scripts.items():
+            (tools / script).write_text(text)
+            (tools / script).chmod(0o755)
+    print(out)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("what", choices=["clinvar", "alphamissense", "mechanism", "nonlof", "ranking", "gnomad", "clinvar_release", "vep", "spliceai", "alphamissense_inputs", "vep_inputs"])
+    parser.add_argument("what", choices=["clinvar", "alphamissense", "mechanism", "nonlof", "ranking", "gnomad", "clinvar_release", "vep", "spliceai", "alphamissense_inputs", "vep_inputs", "cadd"])
     parser.add_argument("--out", required=True)
     parser.add_argument("--plugin", help="spliceai: Ensembl's SpliceAI.pm of VEP 116 (VEP_plugins release/116)")
+    parser.add_argument("--upstream", help="cadd: a folder holding CADD-scripts v1.7.2's extract_scored.py and MMSplice.py")
     args = parser.parse_args()
     out = Path(args.out).resolve()
     if args.what == "spliceai":
         return write_spliceai(out, args.plugin)
+    if args.what == "cadd":
+        return write_cadd(out, args.upstream)
     {"clinvar": write_clinvar, "alphamissense": write_alphamissense,
      "mechanism": write_mechanism, "nonlof": write_nonlof,
      "ranking": write_ranking, "gnomad": write_gnomad,

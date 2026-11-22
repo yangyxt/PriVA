@@ -667,17 +667,19 @@
     {
       "id": "C3",
       "name": "ALPHAMISSENSE_VEP",
-      "calls": [
-        [
-          "AlphaMissense_anno",
-          "{config}"
-        ]
-      ],
+      "module": "modules/local/install_steps/alphamissense_vep.nf",
       "needs": [
         "A1",
         "A2",
         "B2",
         "B3"
+      ],
+      "stage": [
+        "ref_genome",
+        "vep_cache_dir",
+        "vep_plugins_dir",
+        "conservation_file",
+        "alphamissense_prescore"
       ],
       "outputs": [
         "alphamissense_vcf",
@@ -694,18 +696,14 @@
     {
       "id": "C4",
       "name": "ALPHAMISSENSE_GNOMAD",
-      "calls": [
-        [
-          "AlphaMissense_anno_gnomAD",
-          "{config}"
-        ]
-      ],
+      "module": "modules/local/install_steps/alphamissense_gnomad.nf",
       "needs": [
         "C3",
         "C1"
       ],
-      "copies": [
-        "alphamissense_vep_vcf"
+      "stage": [
+        "alphamissense_vep_vcf",
+        "gnomad_vcf_chrX"
       ],
       "outputs": [
         "alphamissense_vep_vcf"

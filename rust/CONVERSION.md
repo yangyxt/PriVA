@@ -1196,6 +1196,60 @@ Changes you can notice:
   its own commands instead of running `install_utils.sh SpliceAI2_install`,
   so it no longer needs `PRIVA_SCRIPT_DIR`.
 
+Part 3 moves the AlphaMissense annotation (C3) and its gnomAD frequencies
+(C4).
+
+```mermaid
+flowchart LR
+  B3["B3: AlphaMissense table"] --> conv["priva alphamissense-vcf build"]
+  conv --> vep["vep ... --cache --offline --merged<br/>-plugin Conservation (B2)<br/>cache and plugins of A2, reference of A1"]
+  vep --> sort["bcftools sort, tabix"]
+  sort --> chk["checks: CSQ, ##VEP release and assembly,<br/>records per chromosome<br/>(bcftools index --stats)"]
+  chk --> C3out["C3: alphamissense_vcf,<br/>alphamissense_vep_vcf<br/>(= alphamissense_vep_base_vcf)"]
+  C3out --> copy["C4: copy into its own folder"]
+  C1["C1: gnomAD family"] --> gn
+  copy --> gn["priva task step --step gnomad<br/>(per chromosome: bcftools view, annotate;<br/>concat, sort)"]
+  gn --> C4out["C4: alphamissense_vep_vcf"]
+```
+
+| Step | Commands in the process |
+| --- | --- |
+| C3 | `priva alphamissense-vcf build`; the `vep` command line of `basic_vep_annotation` (without SpliceAI); `bcftools sort`, `tabix`; `priva alphamissense-cache check-annotation`; `bcftools index --stats` of the converted and annotated VCFs compared |
+| C4 | `cp -p` of C3's VCF and index; `priva task step --step gnomad` on the copy, the annotation's own gnomAD step (the commands of `anno_agg_gnomAD_data`) |
+
+Compared with the shell functions (`tests/install_fixtures.py vep` now
+writes a `vep` that annotates, and A2 receipts; `alphamissense_inputs` writes
+the A1, B2, B3 and C1 receipts):
+
+| Step | Cases compared | Result |
+| --- | --- | --- |
+| C3 | GRCh38 and GRCh37 | the same converted VCF and annotation (bytes and indexes) |
+| C3 | `vep` failing; `vep` losing a record; `vep_installed_version` 115 with VEP 116 | each stops both routes |
+| C4 | GRCh38 and GRCh37, on C3's new output | the same VCF apart from the `##bcftools_*` lines (paths and dates) |
+| C4 | a gnomAD family without chr2 | stops both routes |
+
+C6 reads C4's new output as before (run on the chain).
+
+Changes you can notice:
+
+- C3 no longer runs `priva alpha-annotation-base` (path, recover, check,
+  capture, publish, restore): the step's folder is new for every change of
+  its inputs, so the reuse checks, the pending-publication journal and the
+  `.annotation-base.json` receipt are not needed. The installer's
+  `AlphaMissense_anno` still runs them until phase 7.
+- C3 keeps one annotated VCF and records it under both
+  `alphamissense_vep_vcf` and `alphamissense_vep_base_vcf`; the function kept
+  two copies because C4 changed one in place. C4 now writes its own.
+- C3 checks that the `vep` on PATH is `vep_installed_version`, as
+  `alpha-annotation-base` did, and that VEP kept every record, chromosome by
+  chromosome.
+- C3's `bcftools sort` keeps its temporary files in the task folder
+  (`-T`), not in `/tmp`.
+- VEP runs with the task's CPUs (`--fork`), not the configuration's
+  `threads`; C4's gnomAD step is given the task's CPUs as its threads.
+- C4 no longer leaves the split pieces and GNU parallel's job logs in its
+  folder.
+
 ### Phases 3 to 7
 
 | Phase | Scope | Shell glue now | Python it still runs | Work (tools keep their commands) |
@@ -1203,7 +1257,7 @@ Changes you can notice:
 | 3 | Downloads: A1, A4, A5, B1, B2, B3, B5, B6, B7, B8, B9, D0, F1 | 4 to 10 functions each | `alternative_start_codon.py` (A4) | Each a Nextflow process: curl or git, then `priva install-task record` for the receipt. Done for A1, A4, B1, B2, B3, B5, B6, B7, B8, B9 and F1 (above); A4 no longer runs `alternative_start_codon.py`, whose pickle the Rust detector never reads |
 | 4 | Pipeline scripts: `annotation_vcf.sh` (1,827 lines), `filtration_vcf_per_fam.sh` (356), `prioritization_vcf_per_fam.sh` (430), `common_bash_utils.sh` (1,627) | run inside every analysis task | an inline `python - <<PY` block in `anno_VEP_cache_worker`, and `cadd_conda.py` (finds CADD's conda) | The annotation, filtration and prioritization tasks already exist per step; each runs VEP, bcftools, `CADD.sh` and `priva` with their own command lines instead of a shell function. `priva task run` keeps the task's checks and runs them, since which commands run depends on the settings. Done (above) for filtration, the prioritization steps and the six annotation steps; the scripts stay for the installer and `--phase annotation` until phase 6 |
 | 5 | Steps on native builders: A5 (moved from phase 3), C6, C8, C10, C11, D6, D8, D9, F4 to F10 | 7 to 19 functions each | `protein_domain_mapping.py` (C8's rebuild) | Each a process; F4's acquisition is curl and `priva gene-mechanism prepared`. Done (above), except F5's rebuild, which needs A2's two VEP caches and moves to phase 6 |
-| 6 | Heavy chains: A2, B4, C1, C3, C4, D0 (moved from phase 3), D1, E1, and F5's rebuild. Done (above): C1_chr*, C1, D0, A2 and B4 | 13 to 49 functions each | `cadd_scripts_install.py`, `cadd_prescore_index.py` (kept: they belong to CADD) | VEP, bcftools, CrossMap and `CADD.sh` command lines in the process; one change per step |
+| 6 | Heavy chains: A2, B4, C1, C3, C4, D0 (moved from phase 3), D1, E1, and F5's rebuild. Done (above): C1_chr*, C1, D0, A2, B4, C3 and C4 | 13 to 49 functions each | `cadd_scripts_install.py`, `cadd_prescore_index.py` (kept: they belong to CADD) | VEP, bcftools, CrossMap and `CADD.sh` command lines in the process; one change per step |
 | 7 | Remove the shell installer | `main_install`, `install_cluster.sh`, the `*.sbatch` scripts | | Delete `install_utils.sh` and the bash part of the digest |
 
 All seven phases are finished and checked end to end on the migration branch before any of it goes to `main`.

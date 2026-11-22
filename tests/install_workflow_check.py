@@ -79,6 +79,11 @@ SHELL_LIBRARIES = ("install_utils.sh", "common_bash_utils.sh", "annotation_vcf.s
 # main_workflow for a run task, and only checks that anno_VEP_data exists
 # (clinvar-gene-refresh candidate-route).
 RUN_ENTRIES = {"main_workflow", "anno_VEP_data"}
+# Rust code that only install_utils.sh runs: alpha-annotation-base, for
+# AlphaMissense_anno and the motif function, which no step calls since C3 runs
+# as its own process. It names installer functions to fingerprint their text,
+# not to run them, and goes with install_utils.sh in phase 7.
+SHELL_ONLY = {"rust/src/alpha_annotation_base/profile.rs", "rust/src/alpha_annotation_base/publication.rs"}
 WORD = r"[A-Za-z_][A-Za-z0-9_]*"
 
 
@@ -133,6 +138,8 @@ def check_priva_runs() -> None:
         names |= set(re.findall(r"^function\s+(" + WORD + ")", (ROOT / "scripts" / line).read_text(), re.M))
     missing = {}
     for path in sorted((ROOT / "rust" / "src").rglob("*.rs")):
+        if str(path.relative_to(ROOT)) in SHELL_ONLY:
+            continue
         text = re.split(r"#\[cfg\(test\)\]\s*mod\b", path.read_text(), maxsplit=1)[0]
         for name in set(re.findall(r'"(' + WORD + ')"', text)) & names:
             if name not in reached and name not in RUN_ENTRIES:

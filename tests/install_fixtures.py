@@ -45,7 +45,16 @@ and the like), so the steps that read them can be compared both ways:
       vep_install logs its arguments to DIR/vep_install.log and writes a
       small converted cache and the requested plugins (UTRAnnotator: the
       pinned upstream file) where it is told to, as the VEP cache step (A2)
-      runs it.
+      runs it; DIR/receipts/A2.{hg38,hg19}.json name such a cache and
+      plugins. vep annotates a VCF (logging to DIR/vep.log): a ##VEP line
+      naming the cache and assembly, and a CSQ field from the transcripts of
+      the alphamissense fixtures' four genes.
+  python3 tests/install_fixtures.py alphamissense_inputs --out DIR
+      DIR/receipts/{A1,B2,B3,C1}.{hg38,hg19}.json: a small reference, a
+      conservation track, the publisher's AlphaMissense table (bgzipped,
+      tabix-indexed, the variants of the alphamissense fixture) and a gnomAD
+      family holding some of them: the inputs of the AlphaMissense
+      annotation (C3) besides A2's, and of its gnomAD step (C4).
   python3 tests/install_fixtures.py spliceai --out DIR
       DIR/spliceai/v1/{snv,indel}.vcf.gz: SpliceAI v1 VCFs with tabix
       indexes (no assembly in their headers, so either assembly takes them),
@@ -76,6 +85,7 @@ import json
 import shutil
 import zipfile
 import subprocess
+import sys
 from pathlib import Path
 
 CSQ = [
@@ -195,6 +205,18 @@ AM_CSQ = ["Allele", "Consequence", "IMPACT", "SYMBOL", "Gene", "Feature_type", "
           "BIOTYPE", "EXON", "INTRON", "HGVSc", "HGVSp", "Protein_position", "Amino_acids",
           "DOMAINS", "CANONICAL"]
 AMINO = "ACDEFGHIKLMNPQRSTVWY"
+GNOMAD_FIELDS = (
+    ["AC_joint", "AN_joint", "AF_joint", "nhomalt_joint", "AC_grpmax_joint", "AF_grpmax_joint",
+     "AN_grpmax_joint", "nhomalt_grpmax_joint", "AC_joint_XX", "AN_joint_XX", "AC_joint_XY",
+     "AN_joint_XY", "AF_joint_XX", "AF_joint_XY", "nhomalt_joint_XX", "nhomalt_joint_XY"]
+    + [f"AF_joint_{p}_{s}" for p in POPS for s in ("XX", "XY")]
+    + [f"nhomalt_joint_{p}_XX" for p in POPS])
+# (chrom, first codon - 3, symbol, gene, transcript, length, domain residues,
+# domain, intolerant) of the four AlphaMissense genes.
+AM_GENES = [("chr1", 10000, "GENEA", "ENSG00000000101", "ENST00000000101", 120, (30, 90), "Pfam:PF00069", True),
+            ("chr1", 50000, "GENEC", "ENSG00000000103", "ENST00000000103", 80, (10, 60), "Pfam:PF99901", True),
+            ("chr2", 20000, "GENEB", "ENSG00000000102", "ENST00000000102", 90, (20, 70), "Pfam:PF00001", False),
+            ("chr2", 60000, "GENED", "ENSG00000000104", "ENST00000000104", 70, (15, 55), "Pfam:PF99902", False)]
 
 
 def alphamissense_records():
@@ -204,11 +226,7 @@ def alphamissense_records():
     not in InterPro (DAS's queries). GENEA's and GENEC's domains are
     intolerant, GENEB's and GENED's are not."""
     rows = []
-    genes = [("chr1", 10000, "GENEA", "ENSG00000000101", "ENST00000000101", 120, (30, 90), "Pfam:PF00069", True),
-             ("chr1", 50000, "GENEC", "ENSG00000000103", "ENST00000000103", 80, (10, 60), "Pfam:PF99901", True),
-             ("chr2", 20000, "GENEB", "ENSG00000000102", "ENST00000000102", 90, (20, 70), "Pfam:PF00001", False),
-             ("chr2", 60000, "GENED", "ENSG00000000104", "ENST00000000104", 70, (15, 55), "Pfam:PF99902", False)]
-    for chrom, start, symbol, gene, transcript, length, (first, last), domain, intolerant in genes:
+    for chrom, start, symbol, gene, transcript, length, (first, last), domain, intolerant in AM_GENES:
         exons = 3
         for residue in range(1, length + 1):
             pos = start + 3 * residue
@@ -286,6 +304,78 @@ DISEASES = [
     ("GENEC", "ORPHA:1001", "MONDO:0000103", "condition C", "mendelian_non_neoplastic", "include"),
     ("GENED", "ORPHA:1002", "MONDO:0000104", "condition D", "mendelian_susceptibility_uncertain", "review"),
 ]
+
+
+def write_alphamissense_inputs(out: Path):
+    """The receipts C3 reads besides A2's: a small reference (A1), a
+    conservation track (B2) and the publisher's AlphaMissense table (B3) for
+    each assembly; the table holds the variants of alphamissense_records."""
+    receipts = out / "receipts"
+    receipts.mkdir(parents=True, exist_ok=True)
+    for assembly in ("hg38", "hg19"):
+        a1 = out / "A1" / assembly / "data" / "reference"
+        a1.mkdir(parents=True, exist_ok=True)
+        fasta = a1 / f"{assembly}.fa"
+        fasta.write_text("".join(f">{chrom}\n" + "ACGT" * 20000 + "\n" for chrom in ("chr1", "chr2")))
+        subprocess.run(["samtools", "faidx", fasta], check=True)
+        (receipts / f"A1.{assembly}.json").write_text(json.dumps(
+            receipt("A1", "REFERENCE_FASTA", a1.parents[1], {"ref_genome": fasta}), indent=2) + "\n")
+        b2 = out / "B2" / assembly / "data" / "Conservation"
+        b2.mkdir(parents=True, exist_ok=True)
+        track = b2 / f"{assembly}.phyloP100way.bw"
+        track.write_bytes(b"stand-in bigWig of " + assembly.encode() + b"\n")
+        (receipts / f"B2.{assembly}.json").write_text(json.dumps(
+            receipt("B2", "CONSERVATION", b2.parents[1], {"conservation_file": track}), indent=2) + "\n")
+        b3 = out / "B3" / assembly / "data" / "AlphaMissense"
+        b3.mkdir(parents=True, exist_ok=True)
+        lines = ["# Copyright 2023 DeepMind Technologies Limited", "#",
+                 "# Licensed under CC BY-NC-SA 4.0 license",
+                 "#CHROM\tPOS\tREF\tALT\tgenome\tuniprot_id\ttranscript_id\tprotein_variant\tam_pathogenicity\tam_class"]
+        for chrom, pos, ref, alt, score, _af, pvar, annotation in alphamissense_records():
+            transcript = annotation.split("|")[AM_CSQ.index("Feature")]
+            label = "likely_pathogenic" if score > 0.564 else "likely_benign" if score < 0.34 else "ambiguous"
+            lines.append(f"{chrom}\t{pos}\t{ref}\t{alt}\t{assembly}\tP{transcript[-5:]}\t{transcript}.1\t{pvar}\t{score:g}\t{label}")
+        plain = b3 / f"AlphaMissense_{assembly}.tsv"
+        plain.write_text("\n".join(lines) + "\n")
+        subprocess.run(["bgzip", "-f", plain], check=True)
+        table_gz = Path(f"{plain}.gz")
+        subprocess.run(["tabix", "-f", "-s", "1", "-b", "2", "-e", "2", "-S", "1", table_gz], check=True)
+        (receipts / f"B3.{assembly}.json").write_text(json.dumps(
+            receipt("B3", "ALPHAMISSENSE_TSV", b3.parents[1], {"alphamissense_prescore": table_gz}), indent=2) + "\n")
+        # gnomAD (C1): the 24 chromosomes, with joint frequencies at every
+        # fifth AlphaMissense residue of chr1 and chr2 (one allele each) and
+        # a record elsewhere, as C4 reads them beside gnomad_vcf_chrX.
+        c1 = out / "C1" / assembly / "data" / "gnomAD"
+        c1.mkdir(parents=True, exist_ok=True)
+        header = ["##fileformat=VCFv4.2"]
+        for field in GNOMAD_FIELDS:
+            header.append(f'##INFO=<ID={field},Number={"1" if field.startswith("AN") else "A"},'
+                          f'Type={"Float" if field.startswith("AF") else "Integer"},Description="{field}">')
+        sites = {}
+        for chrom, pos, ref, alt, _score, _af, pvar, _annotation in alphamissense_records():
+            if int(pvar[1:-1]) % 5 == 0 and alt == "CGT"[int(pvar[1:-1]) % 3]:
+                sites.setdefault(chrom, []).append((pos, ref, alt))
+        for chrom in [f"chr{n}" for n in range(1, 23)] + ["chrX", "chrY"]:
+            lines = []
+            for number, (pos, ref, alt) in enumerate(sites.get(chrom, []) + [(70000, "G", "A")]):
+                values = [f"{field}={(number % 7 + 1) / 1000:.5f}" if field.startswith("AF")
+                          else f"{field}={(number * 37) % 5000 + 1}" for field in GNOMAD_FIELDS]
+                lines.append(f"{chrom}\t{pos}\t.\t{ref}\t{alt}\t.\tPASS\t{';'.join(values)}")
+            name = (f"gnomad.joint.v4.1.sites.{chrom}.vcf" if assembly == "hg38"
+                    else f"gnomad.joint.v4.1.sites.hg19.{chrom}.vcf")
+            plain = c1 / name
+            plain.write_text("\n".join(header + [f"##contig=<ID={chrom}>", "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO"]
+                                       + lines) + "\n")
+            target = c1 / (name + (".bgz" if assembly == "hg38" else ".gz"))
+            with open(target, "wb") as handle:
+                subprocess.run(["bgzip", "-c", plain], stdout=handle, check=True)
+            plain.unlink()
+            subprocess.run(["tabix", "-f", "-p", "vcf", target], check=True)
+        chrx = c1 / ("gnomad.joint.v4.1.sites.chrX.vcf.bgz" if assembly == "hg38"
+                     else "gnomad.joint.v4.1.sites.hg19.chrX.vcf.gz")
+        (receipts / f"C1.{assembly}.json").write_text(json.dumps(
+            receipt("C1", "GNOMAD", c1.parents[1], {"gnomad_vcf_chrX": chrx}), indent=2) + "\n")
+    print(receipts)
 
 
 def table(names, rows, delimiter="\t") -> str:
@@ -658,6 +748,80 @@ if "p" in value("--AUTO"):
 """
 
 
+VEP = r"""#!/usr/bin/env python3
+# A stand-in for Ensembl's vep 116: its --help, and an annotation of a VCF
+# with the cache's transcripts (stand-in-transcripts.json beside it), the same
+# on every run: a ##VEP line naming the cache and the assembly, a CSQ field
+# per record (missense on a known transcript, else intergenic) and the
+# statistics file. FAKE_VEP_FAIL makes it fail; FAKE_VEP_DROP makes it lose
+# the first record.
+import gzip, json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+here = Path(__file__).resolve().parent
+if not args or "--help" in args:
+    print("#----------------------------------#\n# ENSEMBL VARIANT EFFECT PREDICTOR #\n"
+          "#----------------------------------#\n\nVersions:\n  ensembl              : 116.0\n"
+          "  ensembl-vep          : 116.0\n")
+    sys.exit(0)
+with open(here.parents[2] / "vep.log", "a") as log:
+    log.write(" ".join(a if not a.startswith("/") else "<path>" for a in args) + "\n")
+def value(name):
+    return args[args.index(name) + 1] if name in args else None
+if os.environ.get("FAKE_VEP_FAIL"):
+    sys.exit("stand-in vep failure")
+assembly = value("--assembly")
+patch = {"GRCh38": "GRCh38.p14", "GRCh37": "GRCh37.p13"}[assembly]
+cache = f"{value('--dir_cache')}/homo_sapiens_merged/116_{assembly}"
+plugins = [args[i + 1] for i, a in enumerate(args) if a == "-plugin"]
+conservation = any(p.startswith("Conservation,") for p in plugins)
+transcripts = json.loads((here / "stand-in-transcripts.json").read_text())
+fields = ["Allele", "Consequence", "IMPACT", "SYMBOL", "Gene", "Feature_type", "Feature", "BIOTYPE",
+          "EXON", "INTRON", "HGVSc", "HGVSp", "Protein_position", "Amino_acids", "DOMAINS", "CANONICAL"]
+fields += ["Conservation"] if conservation else []
+source, target = value("-i"), value("-o")
+opener = gzip.open if source.endswith("gz") else open
+dropped = 0
+with opener(source, "rt") as inp, open(target, "w") as out:
+    for line in inp:
+        if line.startswith("#CHROM"):
+            out.write(f'##VEP="v116.0" time="2026-11-16 00:00:00" cache="{cache}" ensembl=116.a1b2c3d '
+                      f'ensembl-variation=116.a1b2c3d ensembl-io=116.a1b2c3d ensembl-funcgen=116.a1b2c3d '
+                      f'1000genomes="phase3" COSMIC="99" ClinVar="202504" dbSNP="156" gencode="GENCODE 48" '
+                      f'genebuild="2014-07" gnomADe="v4.1" gnomADg="v4.1" assembly="{patch}"\n')
+            out.write('##INFO=<ID=CSQ,Number=.,Type=String,Description="Consequence annotations from Ensembl VEP. '
+                      f'Format: {"|".join(fields)}">\n')
+        elif not line.startswith("#"):
+            if os.environ.get("FAKE_VEP_DROP") and dropped < 1:
+                dropped += 1
+                continue
+            row = line.rstrip("\n").split("\t")
+            info = dict(item.split("=", 1) for item in row[7].split(";") if "=" in item)
+            known = transcripts.get(info.get("TRANSCRIPT", "").split(".")[0])
+            values = dict(Allele=row[4], Consequence="intergenic_variant", IMPACT="MODIFIER")
+            if known and "PVAR" in info:
+                residue = int(info["PVAR"][1:-1])
+                first, last = known["domain_residues"]
+                exons = known["exons"]
+                values.update(Consequence="missense_variant", IMPACT="MODERATE", SYMBOL=known["symbol"],
+                              Gene=known["gene"], Feature_type="Transcript", Feature=known["transcript"],
+                              BIOTYPE="protein_coding", EXON=f"{min(exons, 1 + (residue - 1) * exons // known['length'])}/{exons}",
+                              HGVSc=f"{known['transcript']}.1:c.{3 * residue}{row[3]}>{row[4]}",
+                              HGVSp=f"ENSP{known['transcript'][4:]}.1:p.{info['PVAR']}",
+                              Protein_position=f"{residue}/{known['length']}",
+                              Amino_acids=f"{info['PVAR'][0]}/{info['PVAR'][-1]}",
+                              DOMAINS=known["domain"] if first <= residue <= last else "", CANONICAL="YES")
+            if conservation:
+                values["Conservation"] = f"{(int(row[1]) % 13) / 2:.3f}"
+            csq = "CSQ=" + "|".join(str(values.get(name, "")) for name in fields)
+            row[7] = csq if row[7] in (".", "") else row[7] + ";" + csq
+            line = "\t".join(row) + "\n"
+        out.write(line)
+with open(value("--stats_file"), "w") as out:
+    out.write("<html>stand-in VEP statistics</html>\n")
+"""
+
+
 def write_vep(out: Path):
     root = Path(__file__).resolve().parents[1]
     env = out / "envs" / "priva_acmg"
@@ -672,10 +836,14 @@ def write_vep(out: Path):
         "sub get_version_data { return {'ensembl-vep' => {'release' => 'release/116'}}; }\n1;\n")
     (tools / ".version").write_text("{}\n")
     shutil.copyfile(root / "tests/fixtures/UTRAnnotator116.original.pm", tools / "UTRAnnotator116.original.pm")
+    (tools / "modules" / "Bio" / "EnsEMBL" / "VEP" / "Runner.pm").write_text(
+        "package Bio::EnsEMBL::VEP::Runner;\n1;\n")
+    (tools / "stand-in-transcripts.json").write_text(json.dumps({
+        transcript: dict(symbol=symbol, gene=gene, transcript=transcript, length=length, domain_residues=list(span),
+                         domain=domain, exons=3)
+        for _chrom, _start, symbol, gene, transcript, length, span, domain, _intolerant in AM_GENES}, indent=2) + "\n")
     scripts = {
-        "vep": "#!/bin/sh\nprintf '#----------------------------------#\\n# ENSEMBL VARIANT EFFECT PREDICTOR #\\n"
-               "#----------------------------------#\\n\\nVersions:\\n  ensembl              : 116.0\\n"
-               "  ensembl-vep          : 116.0\\n'\n",
+        "vep": VEP,
         "vep_install": VEP_INSTALL,
         "perl": f"#!/bin/sh\nexec /usr/bin/perl -I{site} \"$@\"\n",
         "conda": "#!/bin/sh\nexit 0\n",
@@ -683,6 +851,19 @@ def write_vep(out: Path):
     for name, text in scripts.items():
         (tools / name).write_text(text)
         (tools / name).chmod(0o755)
+    # What step A2 records for each assembly, from the stand-in installer.
+    receipts = out / "receipts"
+    receipts.mkdir(parents=True, exist_ok=True)
+    plugins = "SpliceAI,SpliceVault,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI,MaveDB"
+    for assembly, genome in (("hg38", "GRCh38"), ("hg19", "GRCh37")):
+        folder = out / "A2" / assembly
+        data = folder / "data"
+        subprocess.run([sys.executable, tools / "vep_install", "--AUTO", "cp", "--CACHE_VERSION", "116",
+                        "--ASSEMBLY", genome, "--CACHEDIR", data / "VEP_cache", "--PLUGINS", plugins,
+                        "--PLUGINSDIR", data / "VEP_plugin"], check=True)
+        (receipts / f"A2.{assembly}.json").write_text(json.dumps(receipt(
+            "A2", "VEP_CACHE", folder, {"vep_cache_dir": data / "VEP_cache", "vep_plugins_dir": data / "VEP_plugin"}),
+            indent=2) + "\n")
     print(env)
 
 
@@ -774,7 +955,7 @@ def write_spliceai(out: Path, plugin=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("what", choices=["clinvar", "alphamissense", "mechanism", "nonlof", "ranking", "gnomad", "clinvar_release", "vep", "spliceai"])
+    parser.add_argument("what", choices=["clinvar", "alphamissense", "mechanism", "nonlof", "ranking", "gnomad", "clinvar_release", "vep", "spliceai", "alphamissense_inputs"])
     parser.add_argument("--out", required=True)
     parser.add_argument("--plugin", help="spliceai: Ensembl's SpliceAI.pm of VEP 116 (VEP_plugins release/116)")
     args = parser.parse_args()
@@ -785,7 +966,7 @@ def main():
      "mechanism": write_mechanism, "nonlof": write_nonlof,
      "ranking": write_ranking, "gnomad": write_gnomad,
      "clinvar_release": write_clinvar_release, "vep": write_vep,
-     "spliceai": write_spliceai}[args.what](out)
+     "alphamissense_inputs": write_alphamissense_inputs}[args.what](out)
 
 
 if __name__ == "__main__":

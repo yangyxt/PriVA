@@ -32,6 +32,21 @@ REQUIRED_RESOURCES = (
     "clingen_map", "gene_dosage_sensitivity", "hpo_assertions",
     "hpo_condition_mechanism_json", "gene_nonlof_mechanism_json",
 )
+# The steps read these caches only in priva's native form; the fixtures are
+# the Python pickles, converted into each run's folder by prepare().
+PICKLED_CACHES = (
+    "clinvar_aa_stat", "clinvar_splice_stat", "clinvar_patho_af_stat", "clinvar_patho_exon_af_stat",
+    "clinvar_gene_stat", "alphamissense_tranx_domain_map", "all_intolerant_domains",
+    "pm1_regions_pkl", "interpro_mapping_pickle", "clingen_map",
+)
+
+
+def priva_binary() -> str:
+    priva = os.environ.get("PRIVA_BINARY") or shutil.which("priva")
+    if not priva:
+        raise ValueError("Set PRIVA_BINARY to the priva program (the install records its path as priva_binary) "
+                         "or put priva on PATH.")
+    return priva
 
 
 def resource(value: str) -> Path:
@@ -113,8 +128,14 @@ def prepare(args) -> Path:
         folder.mkdir(parents=True, exist_ok=True)
     else:
         folder = Path(tempfile.mkdtemp(prefix=f"priva-smoke-{assembly}-")).resolve()
-    for name in ("input", "output", "tmp"):
+    for name in ("input", "output", "tmp", "resources"):
         (folder / name).mkdir()
+    priva = priva_binary()
+    for key in PICKLED_CACHES:
+        native = folder / "resources" / f"{key}.rkyv"
+        subprocess.run([priva, "cache-convert", key, "--pickle", config[key], "--output", str(native)],
+                       check=True, stdout=subprocess.DEVNULL)
+        config[key] = str(native)
     staged = folder / "input" / f"demo20.{assembly}.vcf.gz"
     shutil.copy2(config["input_vcf"], staged)
     shutil.copy2(config["input_vcf"] + ".tbi", str(staged) + ".tbi")
@@ -179,8 +200,7 @@ def run_steps(path: Path) -> None:
     shutil.copyfile(config["input_vcf"] + ".tbi", f"{vcf}.tbi")
     shutil.copyfile(config["hub_cadd_file"], cadd)
     filtered_vcf, filtered_cadd = f"{out}.filtered.vcf.gz", f"{out}.filtered.cadd.tsv"
-    priva = os.environ.get("PRIVA_BINARY") or shutil.which("priva")
-    step = [priva, "task", "step", "--root", str(ROOT), "--config", str(path), "--step"]
+    step = [priva_binary(), "task", "step", "--root", str(ROOT), "--config", str(path), "--step"]
     steps = [
         # 2. Filtration without a family (the fixtures have no pedigree).
         step + ["filtration", "--vcf", str(vcf)],
@@ -199,9 +219,7 @@ def run(args) -> None:
         if not shutil.which(tool):
             raise ValueError(f"Activate the PriVA environment; missing executable: {tool}")
     # The steps run in the priva program (`priva task step`).
-    if not (os.environ.get("PRIVA_BINARY") or shutil.which("priva")):
-        raise ValueError("Set PRIVA_BINARY to the priva program (the install records its path as priva_binary) "
-                         "or put priva on PATH.")
+    priva_binary()
     path = prepare(args)
     print(f"Prepared-fixture smoke test: {path}", flush=True)
     run_steps(path)

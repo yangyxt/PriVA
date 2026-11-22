@@ -1602,10 +1602,15 @@ Changes you can notice:
   and the gene mechanism resources (step F9).
 - `example/smoke_test.py` runs `priva task step` (filtration, combine,
   prioritization) and needs `PRIVA_BINARY` or `priva` on `PATH`, `yq`,
-  `bcftools` and `tabix`. Its bundled resources are Python pickles, which the
-  native readers refuse ("a Python pickle must first be converted with priva
-  cache-convert"); the run stops there, at splicing analysis, as it did on
-  841e200 with the shell scripts.
+  `bcftools` and `tabix`. It now passes on both assemblies (20 variants; 167
+  ranked and 372 ACMG rows on hg38, 112 and 183 on hg19). Since the steps
+  read only native caches it had stopped at splicing analysis ("a Python
+  pickle must first be converted with priva cache-convert"), on 841e200 too:
+  `prepare` now converts the ten pickled fixtures with `priva cache-convert`
+  into the run's `resources/` folder (about 30 seconds, most of it the
+  bundled ClinVar gene statistics), and the two PM1 fixtures lost the
+  `demo_slice_source` label in their metadata, which the converter refuses
+  as an unknown field.
 - `priva cache-resources validate --check-routes` checks the inventory's
   routes against the step IDs of `conf/install_steps.json`
   (`cache_resources.json` names steps, not functions).

@@ -11,7 +11,7 @@
 // the steps after it only when that step's results changed.
 
 include { INSTALL_RELEASE; INSTALL_PLAN; INSTALL_PREFLIGHT; INSTALL_PUBLISH } from '../modules/local/install'
-include { INSTALL_STEP as STEP_A2_VEP_CACHE; INSTALL_STEP as STEP_B4_SPLICEAI; INSTALL_STEP as STEP_C1_chr1_GNOMAD_DOWNLOAD_CHR1; INSTALL_STEP as STEP_C1_chr2_GNOMAD_DOWNLOAD_CHR2; INSTALL_STEP as STEP_C1_chr3_GNOMAD_DOWNLOAD_CHR3; INSTALL_STEP as STEP_C1_chr4_GNOMAD_DOWNLOAD_CHR4; INSTALL_STEP as STEP_C1_chr5_GNOMAD_DOWNLOAD_CHR5; INSTALL_STEP as STEP_C1_chr6_GNOMAD_DOWNLOAD_CHR6; INSTALL_STEP as STEP_C1_chr7_GNOMAD_DOWNLOAD_CHR7; INSTALL_STEP as STEP_C1_chr8_GNOMAD_DOWNLOAD_CHR8; INSTALL_STEP as STEP_C1_chr9_GNOMAD_DOWNLOAD_CHR9; INSTALL_STEP as STEP_C1_chr10_GNOMAD_DOWNLOAD_CHR10; INSTALL_STEP as STEP_C1_chr11_GNOMAD_DOWNLOAD_CHR11; INSTALL_STEP as STEP_C1_chr12_GNOMAD_DOWNLOAD_CHR12; INSTALL_STEP as STEP_C1_chr13_GNOMAD_DOWNLOAD_CHR13; INSTALL_STEP as STEP_C1_chr14_GNOMAD_DOWNLOAD_CHR14; INSTALL_STEP as STEP_C1_chr15_GNOMAD_DOWNLOAD_CHR15; INSTALL_STEP as STEP_C1_chr16_GNOMAD_DOWNLOAD_CHR16; INSTALL_STEP as STEP_C1_chr17_GNOMAD_DOWNLOAD_CHR17; INSTALL_STEP as STEP_C1_chr18_GNOMAD_DOWNLOAD_CHR18; INSTALL_STEP as STEP_C1_chr19_GNOMAD_DOWNLOAD_CHR19; INSTALL_STEP as STEP_C1_chr20_GNOMAD_DOWNLOAD_CHR20; INSTALL_STEP as STEP_C1_chr21_GNOMAD_DOWNLOAD_CHR21; INSTALL_STEP as STEP_C1_chr22_GNOMAD_DOWNLOAD_CHR22; INSTALL_STEP as STEP_C1_chrX_GNOMAD_DOWNLOAD_CHRX; INSTALL_STEP as STEP_C1_chrY_GNOMAD_DOWNLOAD_CHRY; INSTALL_STEP as STEP_C1_GNOMAD; INSTALL_STEP as STEP_C3_ALPHAMISSENSE_VEP; INSTALL_STEP as STEP_C4_ALPHAMISSENSE_GNOMAD; INSTALL_STEP as STEP_D0_CLINVAR_DOWNLOAD; INSTALL_STEP as STEP_D1_split_CLINVAR_VEP_SPLIT; INSTALL_STEP as STEP_D1_chr1_CLINVAR_VEP_CHR1; INSTALL_STEP as STEP_D1_chr2_CLINVAR_VEP_CHR2; INSTALL_STEP as STEP_D1_chr3_CLINVAR_VEP_CHR3; INSTALL_STEP as STEP_D1_chr4_CLINVAR_VEP_CHR4; INSTALL_STEP as STEP_D1_chr5_CLINVAR_VEP_CHR5; INSTALL_STEP as STEP_D1_chr6_CLINVAR_VEP_CHR6; INSTALL_STEP as STEP_D1_chr7_CLINVAR_VEP_CHR7; INSTALL_STEP as STEP_D1_chr8_CLINVAR_VEP_CHR8; INSTALL_STEP as STEP_D1_chr9_CLINVAR_VEP_CHR9; INSTALL_STEP as STEP_D1_chr10_CLINVAR_VEP_CHR10; INSTALL_STEP as STEP_D1_chr11_CLINVAR_VEP_CHR11; INSTALL_STEP as STEP_D1_chr12_CLINVAR_VEP_CHR12; INSTALL_STEP as STEP_D1_chr13_CLINVAR_VEP_CHR13; INSTALL_STEP as STEP_D1_chr14_CLINVAR_VEP_CHR14; INSTALL_STEP as STEP_D1_chr15_CLINVAR_VEP_CHR15; INSTALL_STEP as STEP_D1_chr16_CLINVAR_VEP_CHR16; INSTALL_STEP as STEP_D1_chr17_CLINVAR_VEP_CHR17; INSTALL_STEP as STEP_D1_chr18_CLINVAR_VEP_CHR18; INSTALL_STEP as STEP_D1_chr19_CLINVAR_VEP_CHR19; INSTALL_STEP as STEP_D1_chr20_CLINVAR_VEP_CHR20; INSTALL_STEP as STEP_D1_chr21_CLINVAR_VEP_CHR21; INSTALL_STEP as STEP_D1_chr22_CLINVAR_VEP_CHR22; INSTALL_STEP as STEP_D1_chrX_CLINVAR_VEP_CHRX; INSTALL_STEP as STEP_D1_chrY_CLINVAR_VEP_CHRY; INSTALL_STEP as STEP_D1_chrOther_CLINVAR_VEP_CHROTHER; INSTALL_STEP as STEP_D1_CLINVAR; INSTALL_STEP as STEP_E1_CADD } from '../modules/local/install'
+include { INSTALL_STEP as STEP_A2_VEP_CACHE; INSTALL_STEP as STEP_B4_SPLICEAI; INSTALL_STEP as STEP_C3_ALPHAMISSENSE_VEP; INSTALL_STEP as STEP_C4_ALPHAMISSENSE_GNOMAD; INSTALL_STEP as STEP_D1_split_CLINVAR_VEP_SPLIT; INSTALL_STEP as STEP_D1_chr1_CLINVAR_VEP_CHR1; INSTALL_STEP as STEP_D1_chr2_CLINVAR_VEP_CHR2; INSTALL_STEP as STEP_D1_chr3_CLINVAR_VEP_CHR3; INSTALL_STEP as STEP_D1_chr4_CLINVAR_VEP_CHR4; INSTALL_STEP as STEP_D1_chr5_CLINVAR_VEP_CHR5; INSTALL_STEP as STEP_D1_chr6_CLINVAR_VEP_CHR6; INSTALL_STEP as STEP_D1_chr7_CLINVAR_VEP_CHR7; INSTALL_STEP as STEP_D1_chr8_CLINVAR_VEP_CHR8; INSTALL_STEP as STEP_D1_chr9_CLINVAR_VEP_CHR9; INSTALL_STEP as STEP_D1_chr10_CLINVAR_VEP_CHR10; INSTALL_STEP as STEP_D1_chr11_CLINVAR_VEP_CHR11; INSTALL_STEP as STEP_D1_chr12_CLINVAR_VEP_CHR12; INSTALL_STEP as STEP_D1_chr13_CLINVAR_VEP_CHR13; INSTALL_STEP as STEP_D1_chr14_CLINVAR_VEP_CHR14; INSTALL_STEP as STEP_D1_chr15_CLINVAR_VEP_CHR15; INSTALL_STEP as STEP_D1_chr16_CLINVAR_VEP_CHR16; INSTALL_STEP as STEP_D1_chr17_CLINVAR_VEP_CHR17; INSTALL_STEP as STEP_D1_chr18_CLINVAR_VEP_CHR18; INSTALL_STEP as STEP_D1_chr19_CLINVAR_VEP_CHR19; INSTALL_STEP as STEP_D1_chr20_CLINVAR_VEP_CHR20; INSTALL_STEP as STEP_D1_chr21_CLINVAR_VEP_CHR21; INSTALL_STEP as STEP_D1_chr22_CLINVAR_VEP_CHR22; INSTALL_STEP as STEP_D1_chrX_CLINVAR_VEP_CHRX; INSTALL_STEP as STEP_D1_chrY_CLINVAR_VEP_CHRY; INSTALL_STEP as STEP_D1_chrOther_CLINVAR_VEP_CHROTHER; INSTALL_STEP as STEP_D1_CLINVAR; INSTALL_STEP as STEP_E1_CADD } from '../modules/local/install'
 include { REFERENCE_FASTA as STEP_A1_REFERENCE_FASTA } from '../modules/local/install_steps/reference_fasta'
 include { CDS_FASTA as STEP_A4_CDS_FASTA } from '../modules/local/install_steps/cds_fasta'
 include { NM_TO_ENST as STEP_A5_NM_TO_ENST } from '../modules/local/install_steps/nm_to_enst'
@@ -23,8 +23,34 @@ include { MAVEDB as STEP_B6_MAVEDB } from '../modules/local/install_steps/mavedb
 include { PRIMATEAI as STEP_B7_PRIMATEAI } from '../modules/local/install_steps/primateai'
 include { LOFTEE as STEP_B8_LOFTEE } from '../modules/local/install_steps/loftee'
 include { PEXT as STEP_B9_PEXT } from '../modules/local/install_steps/pext'
+include { GNOMAD_DOWNLOAD as STEP_C1_chr1_GNOMAD_DOWNLOAD_CHR1 } from '../modules/local/install_steps/gnomad_download'
+include { GNOMAD_DOWNLOAD as STEP_C1_chr2_GNOMAD_DOWNLOAD_CHR2 } from '../modules/local/install_steps/gnomad_download'
+include { GNOMAD_DOWNLOAD as STEP_C1_chr3_GNOMAD_DOWNLOAD_CHR3 } from '../modules/local/install_steps/gnomad_download'
+include { GNOMAD_DOWNLOAD as STEP_C1_chr4_GNOMAD_DOWNLOAD_CHR4 } from '../modules/local/install_steps/gnomad_download'
+include { GNOMAD_DOWNLOAD as STEP_C1_chr5_GNOMAD_DOWNLOAD_CHR5 } from '../modules/local/install_steps/gnomad_download'
+include { GNOMAD_DOWNLOAD as STEP_C1_chr6_GNOMAD_DOWNLOAD_CHR6 } from '../modules/local/install_steps/gnomad_download'
+include { GNOMAD_DOWNLOAD as STEP_C1_chr7_GNOMAD_DOWNLOAD_CHR7 } from '../modules/local/install_steps/gnomad_download'
+include { GNOMAD_DOWNLOAD as STEP_C1_chr8_GNOMAD_DOWNLOAD_CHR8 } from '../modules/local/install_steps/gnomad_download'
+include { GNOMAD_DOWNLOAD as STEP_C1_chr9_GNOMAD_DOWNLOAD_CHR9 } from '../modules/local/install_steps/gnomad_download'
+include { GNOMAD_DOWNLOAD as STEP_C1_chr10_GNOMAD_DOWNLOAD_CHR10 } from '../modules/local/install_steps/gnomad_download'
+include { GNOMAD_DOWNLOAD as STEP_C1_chr11_GNOMAD_DOWNLOAD_CHR11 } from '../modules/local/install_steps/gnomad_download'
+include { GNOMAD_DOWNLOAD as STEP_C1_chr12_GNOMAD_DOWNLOAD_CHR12 } from '../modules/local/install_steps/gnomad_download'
+include { GNOMAD_DOWNLOAD as STEP_C1_chr13_GNOMAD_DOWNLOAD_CHR13 } from '../modules/local/install_steps/gnomad_download'
+include { GNOMAD_DOWNLOAD as STEP_C1_chr14_GNOMAD_DOWNLOAD_CHR14 } from '../modules/local/install_steps/gnomad_download'
+include { GNOMAD_DOWNLOAD as STEP_C1_chr15_GNOMAD_DOWNLOAD_CHR15 } from '../modules/local/install_steps/gnomad_download'
+include { GNOMAD_DOWNLOAD as STEP_C1_chr16_GNOMAD_DOWNLOAD_CHR16 } from '../modules/local/install_steps/gnomad_download'
+include { GNOMAD_DOWNLOAD as STEP_C1_chr17_GNOMAD_DOWNLOAD_CHR17 } from '../modules/local/install_steps/gnomad_download'
+include { GNOMAD_DOWNLOAD as STEP_C1_chr18_GNOMAD_DOWNLOAD_CHR18 } from '../modules/local/install_steps/gnomad_download'
+include { GNOMAD_DOWNLOAD as STEP_C1_chr19_GNOMAD_DOWNLOAD_CHR19 } from '../modules/local/install_steps/gnomad_download'
+include { GNOMAD_DOWNLOAD as STEP_C1_chr20_GNOMAD_DOWNLOAD_CHR20 } from '../modules/local/install_steps/gnomad_download'
+include { GNOMAD_DOWNLOAD as STEP_C1_chr21_GNOMAD_DOWNLOAD_CHR21 } from '../modules/local/install_steps/gnomad_download'
+include { GNOMAD_DOWNLOAD as STEP_C1_chr22_GNOMAD_DOWNLOAD_CHR22 } from '../modules/local/install_steps/gnomad_download'
+include { GNOMAD_DOWNLOAD as STEP_C1_chrX_GNOMAD_DOWNLOAD_CHRX } from '../modules/local/install_steps/gnomad_download'
+include { GNOMAD_DOWNLOAD as STEP_C1_chrY_GNOMAD_DOWNLOAD_CHRY } from '../modules/local/install_steps/gnomad_download'
+include { GNOMAD as STEP_C1_GNOMAD } from '../modules/local/install_steps/gnomad'
 include { ALPHAMISSENSE_DOMAIN as STEP_C6_ALPHAMISSENSE_DOMAIN } from '../modules/local/install_steps/alphamissense_domain'
 include { INTERPRO_MAPPING as STEP_C8_INTERPRO_MAPPING } from '../modules/local/install_steps/interpro_mapping'
+include { CLINVAR_DOWNLOAD as STEP_D0_CLINVAR_DOWNLOAD } from '../modules/local/install_steps/clinvar_download'
 include { DAS_DOMAINS as STEP_C10_DAS_DOMAINS } from '../modules/local/install_steps/das_domains'
 include { PM1_REGIONS as STEP_C11_PM1_REGIONS } from '../modules/local/install_steps/pm1_regions'
 include { CLINVAR_PATHO_AF as STEP_D6_CLINVAR_PATHO_AF } from '../modules/local/install_steps/clinvar_patho_af'
@@ -137,36 +163,36 @@ workflow INSTALL_RESOURCES {
     STEP_B7_PRIMATEAI(installNative('B7', plan, [STEP_A2_VEP_CACHE.out.receipt], []))
     STEP_B8_LOFTEE(installNative('B8', plan, [STEP_A1_REFERENCE_FASTA.out.receipt, STEP_A2_VEP_CACHE.out.receipt], ['ref_genome']))
     STEP_B9_PEXT(installNative('B9', plan, [], []))
-    STEP_C1_chr1_GNOMAD_DOWNLOAD_CHR1(installWire('C1_chr1', plan, []))
-    STEP_C1_chr2_GNOMAD_DOWNLOAD_CHR2(installWire('C1_chr2', plan, []))
-    STEP_C1_chr3_GNOMAD_DOWNLOAD_CHR3(installWire('C1_chr3', plan, []))
-    STEP_C1_chr4_GNOMAD_DOWNLOAD_CHR4(installWire('C1_chr4', plan, []))
-    STEP_C1_chr5_GNOMAD_DOWNLOAD_CHR5(installWire('C1_chr5', plan, []))
-    STEP_C1_chr6_GNOMAD_DOWNLOAD_CHR6(installWire('C1_chr6', plan, []))
-    STEP_C1_chr7_GNOMAD_DOWNLOAD_CHR7(installWire('C1_chr7', plan, []))
-    STEP_C1_chr8_GNOMAD_DOWNLOAD_CHR8(installWire('C1_chr8', plan, []))
-    STEP_C1_chr9_GNOMAD_DOWNLOAD_CHR9(installWire('C1_chr9', plan, []))
-    STEP_C1_chr10_GNOMAD_DOWNLOAD_CHR10(installWire('C1_chr10', plan, []))
-    STEP_C1_chr11_GNOMAD_DOWNLOAD_CHR11(installWire('C1_chr11', plan, []))
-    STEP_C1_chr12_GNOMAD_DOWNLOAD_CHR12(installWire('C1_chr12', plan, []))
-    STEP_C1_chr13_GNOMAD_DOWNLOAD_CHR13(installWire('C1_chr13', plan, []))
-    STEP_C1_chr14_GNOMAD_DOWNLOAD_CHR14(installWire('C1_chr14', plan, []))
-    STEP_C1_chr15_GNOMAD_DOWNLOAD_CHR15(installWire('C1_chr15', plan, []))
-    STEP_C1_chr16_GNOMAD_DOWNLOAD_CHR16(installWire('C1_chr16', plan, []))
-    STEP_C1_chr17_GNOMAD_DOWNLOAD_CHR17(installWire('C1_chr17', plan, []))
-    STEP_C1_chr18_GNOMAD_DOWNLOAD_CHR18(installWire('C1_chr18', plan, []))
-    STEP_C1_chr19_GNOMAD_DOWNLOAD_CHR19(installWire('C1_chr19', plan, []))
-    STEP_C1_chr20_GNOMAD_DOWNLOAD_CHR20(installWire('C1_chr20', plan, []))
-    STEP_C1_chr21_GNOMAD_DOWNLOAD_CHR21(installWire('C1_chr21', plan, []))
-    STEP_C1_chr22_GNOMAD_DOWNLOAD_CHR22(installWire('C1_chr22', plan, []))
-    STEP_C1_chrX_GNOMAD_DOWNLOAD_CHRX(installWire('C1_chrX', plan, []))
-    STEP_C1_chrY_GNOMAD_DOWNLOAD_CHRY(installWire('C1_chrY', plan, []))
-    STEP_C1_GNOMAD(installWire('C1', plan, [STEP_A1_REFERENCE_FASTA.out.receipt, STEP_C1_chr1_GNOMAD_DOWNLOAD_CHR1.out.receipt, STEP_C1_chr2_GNOMAD_DOWNLOAD_CHR2.out.receipt, STEP_C1_chr3_GNOMAD_DOWNLOAD_CHR3.out.receipt, STEP_C1_chr4_GNOMAD_DOWNLOAD_CHR4.out.receipt, STEP_C1_chr5_GNOMAD_DOWNLOAD_CHR5.out.receipt, STEP_C1_chr6_GNOMAD_DOWNLOAD_CHR6.out.receipt, STEP_C1_chr7_GNOMAD_DOWNLOAD_CHR7.out.receipt, STEP_C1_chr8_GNOMAD_DOWNLOAD_CHR8.out.receipt, STEP_C1_chr9_GNOMAD_DOWNLOAD_CHR9.out.receipt, STEP_C1_chr10_GNOMAD_DOWNLOAD_CHR10.out.receipt, STEP_C1_chr11_GNOMAD_DOWNLOAD_CHR11.out.receipt, STEP_C1_chr12_GNOMAD_DOWNLOAD_CHR12.out.receipt, STEP_C1_chr13_GNOMAD_DOWNLOAD_CHR13.out.receipt, STEP_C1_chr14_GNOMAD_DOWNLOAD_CHR14.out.receipt, STEP_C1_chr15_GNOMAD_DOWNLOAD_CHR15.out.receipt, STEP_C1_chr16_GNOMAD_DOWNLOAD_CHR16.out.receipt, STEP_C1_chr17_GNOMAD_DOWNLOAD_CHR17.out.receipt, STEP_C1_chr18_GNOMAD_DOWNLOAD_CHR18.out.receipt, STEP_C1_chr19_GNOMAD_DOWNLOAD_CHR19.out.receipt, STEP_C1_chr20_GNOMAD_DOWNLOAD_CHR20.out.receipt, STEP_C1_chr21_GNOMAD_DOWNLOAD_CHR21.out.receipt, STEP_C1_chr22_GNOMAD_DOWNLOAD_CHR22.out.receipt, STEP_C1_chrX_GNOMAD_DOWNLOAD_CHRX.out.receipt, STEP_C1_chrY_GNOMAD_DOWNLOAD_CHRY.out.receipt]))
+    STEP_C1_chr1_GNOMAD_DOWNLOAD_CHR1(installNative('C1_chr1', plan, [], []))
+    STEP_C1_chr2_GNOMAD_DOWNLOAD_CHR2(installNative('C1_chr2', plan, [], []))
+    STEP_C1_chr3_GNOMAD_DOWNLOAD_CHR3(installNative('C1_chr3', plan, [], []))
+    STEP_C1_chr4_GNOMAD_DOWNLOAD_CHR4(installNative('C1_chr4', plan, [], []))
+    STEP_C1_chr5_GNOMAD_DOWNLOAD_CHR5(installNative('C1_chr5', plan, [], []))
+    STEP_C1_chr6_GNOMAD_DOWNLOAD_CHR6(installNative('C1_chr6', plan, [], []))
+    STEP_C1_chr7_GNOMAD_DOWNLOAD_CHR7(installNative('C1_chr7', plan, [], []))
+    STEP_C1_chr8_GNOMAD_DOWNLOAD_CHR8(installNative('C1_chr8', plan, [], []))
+    STEP_C1_chr9_GNOMAD_DOWNLOAD_CHR9(installNative('C1_chr9', plan, [], []))
+    STEP_C1_chr10_GNOMAD_DOWNLOAD_CHR10(installNative('C1_chr10', plan, [], []))
+    STEP_C1_chr11_GNOMAD_DOWNLOAD_CHR11(installNative('C1_chr11', plan, [], []))
+    STEP_C1_chr12_GNOMAD_DOWNLOAD_CHR12(installNative('C1_chr12', plan, [], []))
+    STEP_C1_chr13_GNOMAD_DOWNLOAD_CHR13(installNative('C1_chr13', plan, [], []))
+    STEP_C1_chr14_GNOMAD_DOWNLOAD_CHR14(installNative('C1_chr14', plan, [], []))
+    STEP_C1_chr15_GNOMAD_DOWNLOAD_CHR15(installNative('C1_chr15', plan, [], []))
+    STEP_C1_chr16_GNOMAD_DOWNLOAD_CHR16(installNative('C1_chr16', plan, [], []))
+    STEP_C1_chr17_GNOMAD_DOWNLOAD_CHR17(installNative('C1_chr17', plan, [], []))
+    STEP_C1_chr18_GNOMAD_DOWNLOAD_CHR18(installNative('C1_chr18', plan, [], []))
+    STEP_C1_chr19_GNOMAD_DOWNLOAD_CHR19(installNative('C1_chr19', plan, [], []))
+    STEP_C1_chr20_GNOMAD_DOWNLOAD_CHR20(installNative('C1_chr20', plan, [], []))
+    STEP_C1_chr21_GNOMAD_DOWNLOAD_CHR21(installNative('C1_chr21', plan, [], []))
+    STEP_C1_chr22_GNOMAD_DOWNLOAD_CHR22(installNative('C1_chr22', plan, [], []))
+    STEP_C1_chrX_GNOMAD_DOWNLOAD_CHRX(installNative('C1_chrX', plan, [], []))
+    STEP_C1_chrY_GNOMAD_DOWNLOAD_CHRY(installNative('C1_chrY', plan, [], []))
+    STEP_C1_GNOMAD(installNative('C1', plan, [STEP_A1_REFERENCE_FASTA.out.receipt, STEP_C1_chr1_GNOMAD_DOWNLOAD_CHR1.out.receipt, STEP_C1_chr2_GNOMAD_DOWNLOAD_CHR2.out.receipt, STEP_C1_chr3_GNOMAD_DOWNLOAD_CHR3.out.receipt, STEP_C1_chr4_GNOMAD_DOWNLOAD_CHR4.out.receipt, STEP_C1_chr5_GNOMAD_DOWNLOAD_CHR5.out.receipt, STEP_C1_chr6_GNOMAD_DOWNLOAD_CHR6.out.receipt, STEP_C1_chr7_GNOMAD_DOWNLOAD_CHR7.out.receipt, STEP_C1_chr8_GNOMAD_DOWNLOAD_CHR8.out.receipt, STEP_C1_chr9_GNOMAD_DOWNLOAD_CHR9.out.receipt, STEP_C1_chr10_GNOMAD_DOWNLOAD_CHR10.out.receipt, STEP_C1_chr11_GNOMAD_DOWNLOAD_CHR11.out.receipt, STEP_C1_chr12_GNOMAD_DOWNLOAD_CHR12.out.receipt, STEP_C1_chr13_GNOMAD_DOWNLOAD_CHR13.out.receipt, STEP_C1_chr14_GNOMAD_DOWNLOAD_CHR14.out.receipt, STEP_C1_chr15_GNOMAD_DOWNLOAD_CHR15.out.receipt, STEP_C1_chr16_GNOMAD_DOWNLOAD_CHR16.out.receipt, STEP_C1_chr17_GNOMAD_DOWNLOAD_CHR17.out.receipt, STEP_C1_chr18_GNOMAD_DOWNLOAD_CHR18.out.receipt, STEP_C1_chr19_GNOMAD_DOWNLOAD_CHR19.out.receipt, STEP_C1_chr20_GNOMAD_DOWNLOAD_CHR20.out.receipt, STEP_C1_chr21_GNOMAD_DOWNLOAD_CHR21.out.receipt, STEP_C1_chr22_GNOMAD_DOWNLOAD_CHR22.out.receipt, STEP_C1_chrX_GNOMAD_DOWNLOAD_CHRX.out.receipt, STEP_C1_chrY_GNOMAD_DOWNLOAD_CHRY.out.receipt], ['ref_genome', 'gnomad_download_chr1', 'gnomad_download_chr2', 'gnomad_download_chr3', 'gnomad_download_chr4', 'gnomad_download_chr5', 'gnomad_download_chr6', 'gnomad_download_chr7', 'gnomad_download_chr8', 'gnomad_download_chr9', 'gnomad_download_chr10', 'gnomad_download_chr11', 'gnomad_download_chr12', 'gnomad_download_chr13', 'gnomad_download_chr14', 'gnomad_download_chr15', 'gnomad_download_chr16', 'gnomad_download_chr17', 'gnomad_download_chr18', 'gnomad_download_chr19', 'gnomad_download_chr20', 'gnomad_download_chr21', 'gnomad_download_chr22', 'gnomad_download_chrX', 'gnomad_download_chrY']))
     STEP_C3_ALPHAMISSENSE_VEP(installWire('C3', plan, [STEP_A1_REFERENCE_FASTA.out.receipt, STEP_A2_VEP_CACHE.out.receipt, STEP_B2_CONSERVATION.out.receipt, STEP_B3_ALPHAMISSENSE_TSV.out.receipt]))
     STEP_C4_ALPHAMISSENSE_GNOMAD(installWire('C4', plan, [STEP_C3_ALPHAMISSENSE_VEP.out.receipt, STEP_C1_GNOMAD.out.receipt]))
     STEP_C6_ALPHAMISSENSE_DOMAIN(installNative('C6', plan, [STEP_C4_ALPHAMISSENSE_GNOMAD.out.receipt], ['alphamissense_vep_vcf']))
     STEP_C8_INTERPRO_MAPPING(installNative('C8', plan, [STEP_C4_ALPHAMISSENSE_GNOMAD.out.receipt], ['alphamissense_vep_vcf']))
-    STEP_D0_CLINVAR_DOWNLOAD(installWire('D0', plan, []))
+    STEP_D0_CLINVAR_DOWNLOAD(installNative('D0', plan, [], []))
     STEP_D1_split_CLINVAR_VEP_SPLIT(installWire('D1_split', plan, [STEP_D0_CLINVAR_DOWNLOAD.out.receipt]))
     STEP_D1_chr1_CLINVAR_VEP_CHR1(installWire('D1_chr1', plan, [STEP_A1_REFERENCE_FASTA.out.receipt, STEP_A2_VEP_CACHE.out.receipt, STEP_B1_UTR_ANNOTATOR.out.receipt, STEP_B2_CONSERVATION.out.receipt, STEP_B3_ALPHAMISSENSE_TSV.out.receipt, STEP_B4_SPLICEAI.out.receipt, STEP_B5_SPLICEVAULT.out.receipt, STEP_B6_MAVEDB.out.receipt, STEP_B7_PRIMATEAI.out.receipt, STEP_B8_LOFTEE.out.receipt, STEP_B9_PEXT.out.receipt, STEP_D1_split_CLINVAR_VEP_SPLIT.out.receipt]))
     STEP_D1_chr2_CLINVAR_VEP_CHR2(installWire('D1_chr2', plan, [STEP_A1_REFERENCE_FASTA.out.receipt, STEP_A2_VEP_CACHE.out.receipt, STEP_B1_UTR_ANNOTATOR.out.receipt, STEP_B2_CONSERVATION.out.receipt, STEP_B3_ALPHAMISSENSE_TSV.out.receipt, STEP_B4_SPLICEAI.out.receipt, STEP_B5_SPLICEVAULT.out.receipt, STEP_B6_MAVEDB.out.receipt, STEP_B7_PRIMATEAI.out.receipt, STEP_B8_LOFTEE.out.receipt, STEP_B9_PEXT.out.receipt, STEP_D1_split_CLINVAR_VEP_SPLIT.out.receipt]))

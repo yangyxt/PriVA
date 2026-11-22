@@ -1087,6 +1087,62 @@ The native builders hash some scripts they replace and record those hashes
 `scripts/*.py` as their builder source), so those scripts stay until the
 cache formats stop naming them.
 
+### Phase 6: the heavy chains as their own processes (started 22 November 2026)
+
+Part 1 moves the gnomAD and ClinVar downloads: the 24 chromosome steps
+C1_chr1 to C1_chrY, the family step C1 and the ClinVar release step D0.
+
+The 24 chromosome steps share one process, `GNOMAD_DOWNLOAD`: a registry
+entry may name the `process` its module defines when several steps run the
+same one (`workflows/install.nf` includes it once per step under the step's
+name, and the step's code digest reads that process). The chromosome is the
+step's id after `C1_chr`.
+
+```mermaid
+flowchart LR
+  subgraph dl["C1_chr1 ... C1_chrY (one process, 24 steps)"]
+    curl["curl the .vcf.bgz and .tbi<br/>from gnomAD's bucket"] --> idx["tabix if the index<br/>is not newer"] --> rec["bcftools: reads and<br/>holds a record"]
+  end
+  dl --> C1{"C1: assembly"}
+  A1["A1 reference"] --> C1
+  C1 -- GRCh38 --> link["link the 24 downloads<br/>into data/gnomAD"]
+  C1 -- GRCh37 --> lift["per chromosome, in parallel:<br/>CrossMap vcf --chromid l<br/>bcftools sort, split by landing chromosome"]
+  lift --> cat["per GRCh37 chromosome:<br/>bcftools concat -a -d exact,<br/>sort, index"]
+  D0["D0: priva clinvar-gene-refresh download<br/>(curl: fileDate, MD5, VCF, index,<br/>variant_summary, MANE)"] --> rel["release/inputs.ready.json<br/>paths relocated to the step folder"]
+```
+
+| Step | Commands in the process |
+| --- | --- |
+| C1_chrN | `curl` the chromosome and its index, `tabix -f -p vcf` when the index is not newer, `bcftools view -h` and one record (the checks of `check_vcf_validity`) |
+| C1 GRCh38 | links to the 24 downloads (and their indexes) in `data/gnomAD`, each checked to read and hold a record |
+| C1 GRCh37 | `CrossMap vcf --chromid l` with `hg38_hg19_chain` (shipped or an absolute path) and A1's reference, `bcftools sort`, `index`, `query` and `view` per landing chromosome, then `bcftools concat -a -d exact`, `tabix`, `bcftools sort` and `index` per GRCh37 chromosome, as `gnomAD_liftover` did |
+| D0 | `priva clinvar-gene-refresh download` on a configuration holding only the assembly; `record --relocate` on `inputs.ready.json` and each `.source.json` |
+
+Compared with the shell functions (`tests/install_fixtures.py gnomad` and
+`clinvar_release` write the downloads for `tests/fake_net.py`, which now
+answers `curl --include` with a status line and headers):
+
+| Step | Cases compared | Result |
+| --- | --- | --- |
+| C1_chr1 to C1_chrY | each chromosome; a missing index on the server | same bytes (VCF and index); the missing index stops both |
+| C1 GRCh38 | the 24 downloads (`--family`: every member) | same bytes, all 24 members and indexes |
+| C1 GRCh37 | the 24 downloads lifted with the shipped chain onto a sparse GRCh37 reference: sites that land on their own chromosome, on another one (chr1 to chr2, chr7 to chr16), on the reverse strand, or nowhere | the same 24 members apart from the provenance lines that name paths and times (`--volatile 'bcftools_*' --volatile originalFile`) |
+| D0 | hg38 and hg19; a wrong publisher MD5 | the same release file apart from its times and own folder; the wrong MD5 stops both |
+
+Changes you can notice:
+
+- C1 lists `hg38_hg19_chain` under `settings` (the shell function read it from
+  the configuration without counting it).
+- C1's GRCh37 route gives CrossMap a link named `.vcf.gz` to each download
+  instead of recompressing it with `bcftools view -Oz`: CrossMap copies no
+  `##bcftools` lines, so the lifted files are the same, and the step no longer
+  writes a second copy of gnomAD. Its work files (the links, the lifted
+  pieces) are removed; the step folder holds the 24 members and their indexes.
+- C1 keeps no links to the GRCh38 downloads for GRCh37 (nothing reads them).
+- As before, a `gnomad_vcf_chrX` in your configuration does not stand in for
+  the family (compared: both routes build their own); adopt an existing
+  installation with `--adopt`.
+
 ### Phases 3 to 7
 
 | Phase | Scope | Shell glue now | Python it still runs | Work (tools keep their commands) |
@@ -1094,7 +1150,7 @@ cache formats stop naming them.
 | 3 | Downloads: A1, A4, A5, B1, B2, B3, B5, B6, B7, B8, B9, D0, F1 | 4 to 10 functions each | `alternative_start_codon.py` (A4) | Each a Nextflow process: curl or git, then `priva install-task record` for the receipt. Done for A1, A4, B1, B2, B3, B5, B6, B7, B8, B9 and F1 (above); A4 no longer runs `alternative_start_codon.py`, whose pickle the Rust detector never reads |
 | 4 | Pipeline scripts: `annotation_vcf.sh` (1,827 lines), `filtration_vcf_per_fam.sh` (356), `prioritization_vcf_per_fam.sh` (430), `common_bash_utils.sh` (1,627) | run inside every analysis task | an inline `python - <<PY` block in `anno_VEP_cache_worker`, and `cadd_conda.py` (finds CADD's conda) | The annotation, filtration and prioritization tasks already exist per step; each runs VEP, bcftools, `CADD.sh` and `priva` with their own command lines instead of a shell function. `priva task run` keeps the task's checks and runs them, since which commands run depends on the settings. Done (above) for filtration, the prioritization steps and the six annotation steps; the scripts stay for the installer and `--phase annotation` until phase 6 |
 | 5 | Steps on native builders: A5 (moved from phase 3), C6, C8, C10, C11, D6, D8, D9, F4 to F10 | 7 to 19 functions each | `protein_domain_mapping.py` (C8's rebuild) | Each a process; F4's acquisition is curl and `priva gene-mechanism prepared`. Done (above), except F5's rebuild, which needs A2's two VEP caches and moves to phase 6 |
-| 6 | Heavy chains: A2, B4, C1, C3, C4, D0 (moved from phase 3), D1, E1, and F5's rebuild | 13 to 49 functions each | `cadd_scripts_install.py`, `cadd_prescore_index.py` (kept: they belong to CADD) | VEP, bcftools, CrossMap and `CADD.sh` command lines in the process; one change per step |
+| 6 | Heavy chains: A2, B4, C1, C3, C4, D0 (moved from phase 3), D1, E1, and F5's rebuild. Done (above): C1_chr*, C1 and D0 | 13 to 49 functions each | `cadd_scripts_install.py`, `cadd_prescore_index.py` (kept: they belong to CADD) | VEP, bcftools, CrossMap and `CADD.sh` command lines in the process; one change per step |
 | 7 | Remove the shell installer | `main_install`, `install_cluster.sh`, the `*.sbatch` scripts | | Delete `install_utils.sh` and the bash part of the digest |
 
 All seven phases are finished and checked end to end on the migration branch before any of it goes to `main`.

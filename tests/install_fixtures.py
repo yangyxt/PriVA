@@ -25,6 +25,19 @@ and the like), so the steps that read them can be compared both ways:
       of its variants, G2P and ClinGen dosage tables, for the ClinVar
       injection (F7) and the non-LOF mechanism sources and cache (F6, F8).
       PanelApp and the GoFCards workbook are left out (the server's 404).
+  python3 tests/install_fixtures.py gnomad --out DIR
+      DIR/net/HOST/PATH: gnomAD's 24 joint sites chromosomes (bgzipped, with
+      tabix indexes) holding a few variants each, placed by the shipped
+      hg38ToHg19 chain so that they lift to the same GRCh37 chromosome, to
+      another one, onto the reverse strand, or nowhere; DIR/receipts/A1.hg19.json
+      and DIR/receipts/A1.hg38.json: references of step A1. The GRCh37 one has
+      the real chromosome lengths and holds bases only where the lifted
+      variants land (a sparse file with its own .fai).
+  python3 tests/install_fixtures.py clinvar_release --out DIR
+      DIR/net/HOST/PATH: NCBI's weekly ClinVar VCFs of both assemblies (with
+      a ##fileDate, a tabix index and the publisher's .md5), variant_summary
+      (with its .md5) and MANE's summary, as the ClinVar download (D0) reads
+      them from the sources of cache_resources.json.
   python3 tests/install_fixtures.py ranking --out DIR
       DIR/net/HOST/PATH: the public inputs of the HPO gene ranking (F10), the
       small made-up files of rust/tests/hpo_gene_ranking, compressed as the
@@ -404,15 +417,202 @@ def write_ranking(out: Path):
     print(out / "net")
 
 
+GNOMAD_BASE = "storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint"
+GNOMAD_CHROMOSOMES = [f"chr{n}" for n in range(1, 23)] + ["chrX", "chrY"]
+
+
+def chains(path: Path):
+    """The chains of a UCSC chain file: (header fields, [(t, q, size)])."""
+    header, blocks, t, q = None, [], 0, 0
+    with gzip.open(path, "rt") as handle:
+        for line in handle:
+            fields = line.split()
+            if not fields:
+                continue
+            if fields[0] == "chain":
+                if header:
+                    yield header, blocks
+                header, blocks = fields, []
+                t, q = int(fields[5]), int(fields[10])
+                continue
+            size = int(fields[0])
+            blocks.append((t, q, size))
+            if len(fields) == 3:
+                t, q = t + size + int(fields[1]), q + size + int(fields[2])
+    if header:
+        yield header, blocks
+
+
+def lifted(header, t_block, q_block, at):
+    """The GRCh37 0-based position of GRCh38 0-based position AT in a block."""
+    q = q_block + (at - t_block)
+    return q if header[9] == "+" else int(header[8]) - q - 1
+
+
+def write_gnomad(out: Path):
+    import random
+    root = Path(__file__).resolve().parents[1]
+    rng = random.Random(41)
+    sizes38, sizes19, picks = {}, {}, {c: [] for c in GNOMAD_CHROMOSOMES}
+    unmapped = {}
+    for header, blocks in chains(root / "data/liftover/hg38ToHg19.over.chain.gz"):
+        source, target = header[2], header[7]
+        sizes38[source] = int(header[3])
+        sizes19[target] = int(header[8])
+        if source not in picks:
+            continue
+        long = [b for b in blocks if b[2] >= 400]
+        if not long:
+            continue
+        kinds = {kind for kind, *_ in picks[source]}
+        if target == source and header[9] == "+" and "same" not in kinds:
+            picks[source].append(("same", header, long[len(long) // 2]))
+            if len(blocks) > 1 and source not in unmapped:
+                # A position in the gap after the first block lifts nowhere.
+                gap_t = blocks[0][0] + blocks[0][2]
+                if blocks[1][0] - gap_t > 10:
+                    unmapped[source] = gap_t + 5
+        elif target == source and header[9] == "-" and "reverse" not in kinds:
+            picks[source].append(("reverse", header, long[0]))
+        elif target in sizes19 and target != source and target in picks and "other" not in kinds \
+                and source in ("chr1", "chr7", "chrX"):
+            picks[source].append(("other", header, long[0]))
+    bases = {}
+    records = {c: [] for c in GNOMAD_CHROMOSOMES}
+    for chrom, chosen in picks.items():
+        assert any(kind == "same" for kind, *_ in chosen), chrom
+        for kind, header, (t_block, q_block, size) in chosen:
+            offsets = (100, 200, 300) if kind == "same" else (150,)
+            for number, offset in enumerate(offsets):
+                at = t_block + offset
+                q = lifted(header, t_block, q_block, at)
+                window = bases.setdefault(header[7], {})
+                for spot in range(q - 60, q + 60):
+                    window.setdefault(spot, rng.choice("ACGT"))
+                ref = rng.choice("ACGT")
+                if number == 1:
+                    alt = ref + "AC"          # an insertion
+                elif number == 2:
+                    ref, alt = ref + "GT", ref  # a deletion
+                else:
+                    # A substitution whose lifted ALT differs from the GRCh37 base.
+                    lifted_base = window[q]
+                    choices = [b for b in "ACGT" if (b if header[9] == "+" else "TGCA"["ACGT".index(b)]) != lifted_base]
+                    alt = choices[0]
+                records[chrom].append((at + 1, ref, alt))
+        if chrom in unmapped:
+            records[chrom].append((unmapped[chrom] + 1, "A", "G"))
+    net = out / "net" / GNOMAD_BASE
+    net.mkdir(parents=True, exist_ok=True)
+    info = [f"##INFO=<ID={name},Number={'1' if name.startswith(('AN', 'nhomalt')) else 'A'},"
+            f"Type={'Float' if name.startswith('AF') else 'Integer'},Description=\"{name}\">"
+            for name in FREQUENCIES + ["AC_joint_XX", "AN_joint_XX", "AC_joint_XY", "AN_joint_XY",
+                                       "AF_joint_XX", "AF_joint_XY", "nhomalt_joint_XX", "nhomalt_joint_XY"]]
+    contigs = [f"##contig=<ID={c},length={sizes38[c]},assembly=GRCh38>" for c in GNOMAD_CHROMOSOMES]
+    for chrom in GNOMAD_CHROMOSOMES:
+        lines = ["##fileformat=VCFv4.2", '##FILTER=<ID=PASS,Description="All filters passed">'] + info + contigs
+        lines.append("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO")
+        for pos, ref, alt in sorted(records[chrom]):
+            values = ";".join(f"{name}={'0.01' if name.startswith('AF') else 3}" for name in
+                              ["AC_joint", "AN_joint", "AF_joint", "nhomalt_joint"])
+            lines.append(f"{chrom}\t{pos}\t.\t{ref}\t{alt}\t.\tPASS\t{values}")
+        vcf = net / f"gnomad.joint.v4.1.sites.{chrom}.vcf.bgz"
+        plain = out / f"{chrom}.vcf"
+        plain.write_text("\n".join(lines) + "\n")
+        with open(vcf, "wb") as handle:
+            subprocess.run(["bgzip", "-c", plain], stdout=handle, check=True)
+        subprocess.run(["tabix", "-f", "-p", "vcf", vcf], check=True)
+        plain.unlink()
+    # The GRCh37 reference: real lengths, bases only around the lifted sites.
+    folder = out / "A1"
+    fasta = folder / "data/ucsc/hg19.fa"
+    fasta.parent.mkdir(parents=True, exist_ok=True)
+    index, offset = [], 0
+    with open(fasta, "wb") as handle:
+        for chrom in GNOMAD_CHROMOSOMES:
+            length = sizes19[chrom]
+            name = f">{chrom}\n".encode()
+            handle.seek(offset)
+            handle.write(name)
+            start = offset + len(name)
+            index.append(f"{chrom}\t{length}\t{start}\t60\t61")
+            for spot, base in sorted(bases.get(chrom, {}).items()):
+                if 0 <= spot < length:
+                    handle.seek(start + (spot // 60) * 61 + spot % 60)
+                    handle.write(base.encode())
+            offset = start + length + (length + 59) // 60
+            handle.seek(offset - 1)
+            handle.write(b"\n")
+    (folder / "data/ucsc/hg19.fa.fai").write_text("\n".join(index) + "\n")
+    small = out / "A1-hg38" / "data/ucsc/hg38.fa"
+    small.parent.mkdir(parents=True, exist_ok=True)
+    small.write_text(">chr1\nACGTACGTAC\n")
+    (small.parent / "hg38.fa.fai").write_text("chr1\t10\t6\t10\t11\n")
+    receipts = out / "receipts"
+    receipts.mkdir(parents=True, exist_ok=True)
+    for label, where, path in (("hg19", folder, fasta), ("hg38", small.parents[2], small)):
+        (receipts / f"A1.{label}.json").write_text(json.dumps(
+            receipt("A1", "REFERENCE_FASTA", where, {"ref_genome": path}), indent=2) + "\n")
+    counts = {c: len(r) for c, r in records.items()}
+    print(json.dumps(counts))
+    print(out / "net")
+
+
+def write_clinvar_release(out: Path):
+    root = Path(__file__).resolve().parents[1]
+    resources = json.loads((root / "cache_resources.json").read_text())["resources"]
+    template = resources["clinvar_vcf"]["source"]["latest_url_template"]
+    summary_url = resources["clinvar_variant_summary"]["source"]["url"]
+    mane_url = resources["mane_select"]["source"]["url"]
+    net = out / "net"
+    served = lambda url: net / url.split("://", 1)[1]
+
+    def publish(url: str, data: bytes, manifest: bool):
+        path = served(url)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        if manifest:
+            Path(f"{path}.md5").write_text(f"{hashlib.md5(data).hexdigest()}  {path.name}\n")
+        return path
+
+    for assembly, contig_length in (("GRCh37", 249250621), ("GRCh38", 248956422)):
+        lines = ["##fileformat=VCFv4.1", "##fileDate=2026-11-16", "##source=ClinVar",
+                 '##INFO=<ID=CLNSIG,Number=.,Type=String,Description="Clinical significance">',
+                 '##INFO=<ID=GENEINFO,Number=1,Type=String,Description="Gene">',
+                 f"##contig=<ID=1,length={contig_length}>",
+                 "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO"]
+        for number, pos in enumerate((925952, 930165, 935222), start=1):
+            lines.append(f"1\t{pos}\t{number}\tG\tA\t.\t.\tCLNSIG=Pathogenic;GENEINFO=SAMD11:148398")
+        plain = out / f"clinvar.{assembly}.vcf"
+        out.mkdir(parents=True, exist_ok=True)
+        plain.write_text("\n".join(lines) + "\n")
+        vcf = subprocess.run(["bgzip", "-c", plain], capture_output=True, check=True).stdout
+        plain.unlink()
+        path = publish(template.format(assembly=assembly), vcf, manifest=True)
+        subprocess.run(["tabix", "-f", "-p", "vcf", path], check=True)
+    summary = table(["#AlleleID", "Type", "Name", "GeneID", "GeneSymbol", "ClinicalSignificance", "Assembly"],
+                    [["1", "single nucleotide variant", "NM_152486.4(SAMD11):c.1A>G", "148398", "SAMD11",
+                      "Pathogenic", "GRCh38"]])
+    publish(summary_url, gzip.compress(summary.encode(), mtime=0), manifest=True)
+    mane = table(["#NCBI_GeneID", "Ensembl_Gene", "HGNC_ID", "symbol", "name", "RefSeq_nuc", "RefSeq_prot",
+                  "Ensembl_nuc", "Ensembl_prot", "MANE_status", "GRCh38_chr", "chr_start", "chr_end", "chr_strand"],
+                 [["GeneID:148398", "ENSG00000187634.13", "HGNC:28706", "SAMD11", "sterile alpha motif domain containing 11",
+                   "NM_001385641.1", "NP_001372570.1", "ENST00000616016.5", "ENSP00000478421.2", "MANE Select",
+                   "NC_000001.11", "925731", "944574", "+"]])
+    publish(mane_url, gzip.compress(mane.encode(), mtime=0), manifest=False)
+    print(net)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("what", choices=["clinvar", "alphamissense", "mechanism", "nonlof", "ranking"])
+    parser.add_argument("what", choices=["clinvar", "alphamissense", "mechanism", "nonlof", "ranking", "gnomad", "clinvar_release"])
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
     out = Path(args.out).resolve()
     {"clinvar": write_clinvar, "alphamissense": write_alphamissense,
      "mechanism": write_mechanism, "nonlof": write_nonlof,
-     "ranking": write_ranking}[args.what](out)
+     "ranking": write_ranking, "gnomad": write_gnomad,
+     "clinvar_release": write_clinvar_release}[args.what](out)
 
 
 if __name__ == "__main__":

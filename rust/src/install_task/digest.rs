@@ -292,12 +292,16 @@ impl Installer {
                 path.display()
             ))
         })?;
-        let process = format!("process {} ", super::text(entry, "name"));
+        // Steps that share a process name it (registry "process").
+        let name = match entry.get("process").and_then(Json::as_str) {
+            Some(name) => name.to_owned(),
+            None => super::text(entry, "name"),
+        };
+        let process = format!("process {name} ");
         if !text.lines().any(|line| line.starts_with(&process)) {
             return Err(fail(format!(
-                "step {}: {module} defines no process {}",
+                "step {}: {module} defines no process {name}",
                 super::text(entry, "id"),
-                super::text(entry, "name")
             )));
         }
         Ok(text)

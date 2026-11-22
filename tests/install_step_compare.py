@@ -31,8 +31,16 @@ writes (built_at), and without the column NAME of a tab-separated file whose
 first line names it (a download log's downloaded_at).
 --own-paths: with each route's own step folder (the receipt's "folder") read
 as the same, for a file that names where it lives.
+A VCF's meta lines are volatile by key: --volatile 'bcftools_*Command' leaves
+out the ##bcftools_viewCommand=... lines (the paths and time of the command
+that wrote it), compared as shell patterns. Such a file's index then differs
+with it, and is only checked to be there on both sides.
+
+--family: a key that names the chrX member of a chromosome family
+(NAME.chrX.vcf.gz and the like) is compared with its 23 other members.
 """
 import argparse
+import fnmatch
 import gzip
 import hashlib
 import json
@@ -44,7 +52,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OLD_REGISTRY = ROOT / "tests" / "fixtures" / "install-steps-1879c0c.json"
-LINKED = ("conf", "scripts", "data", "rust", "modules", "workflows", "bin")
+LINKED = ("conf", "scripts", "data", "rust", "modules", "workflows", "bin", "cache_resources.json")
 
 
 def sha(path: Path) -> str:
@@ -99,6 +107,13 @@ def normalized(path: Path, folder: str, volatile) -> bytes:
         raw = raw.replace(folder.encode(), b"<FOLDER>")
     if not volatile:
         return raw
+    if raw.startswith(b"##fileformat=VCF"):
+        def kept(line: bytes) -> bool:
+            if not line.startswith(b"##"):
+                return True
+            key = line[2:].split(b"=", 1)[0].decode(errors="replace")
+            return not any(fnmatch.fnmatchcase(key, pattern) for pattern in volatile)
+        return b"\n".join(line for line in raw.split(b"\n") if kept(line))
     try:
         value = json.loads(raw)
     except ValueError:
@@ -180,7 +195,7 @@ def new_route(args, plan_json: Path, work: Path, env: dict) -> dict:
     stage = ", ".join(f"'{k}'" for k in entry.get("stage", []))
     (here / "harness.nf").write_text(f"""
 include {{ installNative }} from '{ROOT}/workflows/install'
-include {{ {entry['name']} }} from '{str(module)[:-3]}'
+include {{ {entry.get('process', entry['name'])} as {entry['name']} }} from '{str(module)[:-3]}'
 workflow {{
     def plan = Channel.of(file(params.plan))
     def needs = (params.inputs ?: '').tokenize(',').collect {{ r -> Channel.of(file(r)) }}
@@ -202,6 +217,44 @@ workflow {{
     return json.loads(receipts[-1].read_text())
 
 
+def compare(args, old: dict, new: dict, key: str, a: str, b: str) -> int:
+    """Compare one key's files of the two routes; 1 when they differ."""
+    if not (Path(a).exists() and Path(b).exists()):
+        print(f"  {key}: missing on {'both sides' if not Path(a).exists() and not Path(b).exists() else 'one side'}")
+        print(f"    old {a}\n    new {b}")
+        return 1
+    fa, fb = fingerprint(Path(a)), fingerprint(Path(b))
+    same = fa == fb
+    if not same and gunzipped(Path(a)) is not None and gunzipped(Path(a)) == gunzipped(Path(b)):
+        # A gzip header holds the name and time it was written with, which
+        # differ between two runs of the same command.
+        print(f"  {key}: same decompressed {gunzipped(Path(a))} (gzip header differs)")
+        print(f"    old {a}\n    new {b}")
+        return 0
+    apart_from = False
+    if not same and (args.volatile or args.own_paths):
+        folders = (old.get("folder", ""), new.get("folder", "")) if args.own_paths else ("", "")
+        pa, pb = apart(Path(a), folders[0], args.volatile), apart(Path(b), folders[1], args.volatile)
+        if pa == pb:
+            reasons = args.volatile + (["its own folder"] if args.own_paths else [])
+            print(f"  {key}: same apart from {', '.join(reasons)} {pa}")
+            print(f"    old {a}\n    new {b}")
+            same = apart_from = True
+    if not apart_from:
+        print(f"  {key}: {'same' if same else 'DIFFERENT'} {fa}" + ("" if same else f" / {fb}"))
+        print(f"    old {a}\n    new {b}")
+    differ = not same
+    # The index files beside a key's file are read with it.
+    for ext in (".tbi", ".csi", ".fai", ".gzi"):
+        ia, ib = Path(a + ext), Path(b + ext)
+        if ia.exists() or ib.exists():
+            ok = ia.exists() and ib.exists() and (apart_from or sha(ia) == sha(ib))
+            differ += not ok
+            what = "there on both sides" if apart_from else "same"
+            print(f"  {key}{ext}: {what if ok else 'DIFFERENT or missing on one side'}")
+    return int(bool(differ))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--step", required=True)
@@ -214,6 +267,7 @@ def main():
     parser.add_argument("--new-only", action="store_true")
     parser.add_argument("--volatile", action="append", default=[])
     parser.add_argument("--own-paths", action="store_true")
+    parser.add_argument("--family", action="store_true")
     args = parser.parse_args()
     args.config = str(Path(args.config).resolve())
     args.priva = str(Path(args.priva).resolve())
@@ -240,32 +294,13 @@ def main():
             print(f"  {key}: only {'new' if a is None else 'old'} records it")
             differ += 1
             continue
-        fa, fb = fingerprint(Path(a)), fingerprint(Path(b))
-        same = fa == fb
-        if not same and gunzipped(Path(a)) is not None and gunzipped(Path(a)) == gunzipped(Path(b)):
-            # A gzip header holds the name and time it was written with, which
-            # differ between two runs of the same command.
-            print(f"  {key}: same decompressed {gunzipped(Path(a))} (gzip header differs)")
-            print(f"    old {a}\n    new {b}")
-            continue
-        if not same and (args.volatile or args.own_paths):
-            folders = (old.get("folder", ""), new.get("folder", "")) if args.own_paths else ("", "")
-            pa, pb = apart(Path(a), folders[0], args.volatile), apart(Path(b), folders[1], args.volatile)
-            if pa == pb:
-                reasons = args.volatile + (["its own folder"] if args.own_paths else [])
-                print(f"  {key}: same apart from {', '.join(reasons)} {pa}")
-                print(f"    old {a}\n    new {b}")
-                continue
-        differ += not same
-        print(f"  {key}: {'same' if same else 'DIFFERENT'} {fa}" + ("" if same else f" / {fb}"))
-        print(f"    old {a}\n    new {b}")
-        # The index files beside a key's file are read with it.
-        for ext in (".tbi", ".csi", ".fai", ".gzi"):
-            ia, ib = Path(a + ext), Path(b + ext)
-            if ia.exists() or ib.exists():
-                ok = ia.exists() and ib.exists() and sha(ia) == sha(ib)
-                differ += not ok
-                print(f"  {key}{ext}: {'same' if ok else 'DIFFERENT or missing on one side'}")
+        pairs = [(key, a, b)]
+        if args.family and ".chrX." in Path(a).name and ".chrX." in Path(b).name:
+            for chrom in [str(n) for n in range(1, 23)] + ["Y"]:
+                member = lambda path: str(Path(path).with_name(Path(path).name.replace(".chrX.", f".chr{chrom}.")))
+                pairs.append((f"{key}[chr{chrom}]", member(a), member(b)))
+        for label, a, b in pairs:
+            differ += compare(args, old, new, label, a, b)
     sys.exit(1 if differ else 0)
 
 

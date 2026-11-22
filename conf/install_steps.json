@@ -1,5 +1,5 @@
 {
-  "about": "Install steps run as Nextflow tasks by workflows/install.nf. A step with a module runs as its own process (modules/local/install_steps/MODULE, process NAME): the tools' own commands and priva write its results into the task's data/ folder, and priva install-task record writes its receipt; storeDir keeps both in the step's lineage folder. stage: keys of the steps it needs whose files are staged into such a task. Any other step calls existing installer functions from scripts/install_utils.sh with its own private configuration, whose cache_root is the step's lineage folder. Tokens: {config} is that configuration, {script_dir} the scripts folder, {KEY} the configuration value of KEY. runs: installer functions that a program of the step runs itself (priva clinvar-gene-refresh runs the ClinVar stages), counted in the step's code digest with the functions its calls reach. needs: steps whose receipts supply input keys. outputs: keys the step must set; optional_outputs may be empty. user_inputs: keys naming files you supply, kept from your configuration and counted in lineage. settings: configuration values that change results (glob patterns allowed). copies: input keys the step rewrites in place; the runner copies them into the step's own folder first. writable: the folder stays writable after the step (otherwise it is made read-only). priva_commands: priva commands the step runs that its functions pick at run time (\"${PRIVA_BIN}\" \"$command\"); the Rust files behind every priva command a step runs count in its code digest. release: how to ask a changing source for its current release (git: the commit of url and ref; http: the server's ETag, Last-Modified and size), part of the step's lineage. Tokens {grch} (GRCh37 or GRCh38) and {loftee_branch} (master or grch38) follow the assembly. adopt_paths: where an older installation that does not name an output key put that file, for --adopt ({KEY} from the old configuration). pinned: the release is kept in resource_root/pins.json and only checked again with --refresh STEP. max_age_months: a pinned release older than this many calendar months (from the day it was taken) is replaced by the current one.",
+  "about": "Install steps run as Nextflow tasks by workflows/install.nf. A step with a module runs as its own process (modules/local/install_steps/MODULE, process NAME, or the process named in process when several steps share it): the tools' own commands and priva write its results into the task's data/ folder, and priva install-task record writes its receipt; storeDir keeps both in the step's lineage folder. stage: keys of the steps it needs whose files are staged into such a task. Any other step calls existing installer functions from scripts/install_utils.sh with its own private configuration, whose cache_root is the step's lineage folder. Tokens: {config} is that configuration, {script_dir} the scripts folder, {KEY} the configuration value of KEY. runs: installer functions that a program of the step runs itself (priva clinvar-gene-refresh runs the ClinVar stages), counted in the step's code digest with the functions its calls reach. needs: steps whose receipts supply input keys. outputs: keys the step must set; optional_outputs may be empty. user_inputs: keys naming files you supply, kept from your configuration and counted in lineage. settings: configuration values that change results (glob patterns allowed). copies: input keys the step rewrites in place; the runner copies them into the step's own folder first. writable: the folder stays writable after the step (otherwise it is made read-only). priva_commands: priva commands the step runs that its functions pick at run time (\"${PRIVA_BIN}\" \"$command\"); the Rust files behind every priva command a step runs count in its code digest. release: how to ask a changing source for its current release (git: the commit of url and ref; http: the server's ETag, Last-Modified and size), part of the step's lineage. Tokens {grch} (GRCh37 or GRCh38) and {loftee_branch} (master or grch38) follow the assembly. adopt_paths: where an older installation that does not name an output key put that file, for --adopt ({KEY} from the old configuration). pinned: the release is kept in resource_root/pins.json and only checked again with --refresh STEP. max_age_months: a pinned release older than this many calendar months (from the day it was taken) is replaced by the current one.",
   "folder_keys": [
     "cache_root",
     "vep_cache_dir",
@@ -293,13 +293,8 @@
     {
       "id": "C1_chr1",
       "name": "GNOMAD_DOWNLOAD_CHR1",
-      "calls": [
-        [
-          "gnomAD_download_chrom",
-          "{config}",
-          "1"
-        ]
-      ],
+      "module": "modules/local/install_steps/gnomad_download.nf",
+      "process": "GNOMAD_DOWNLOAD",
       "needs": [],
       "outputs": [
         "gnomad_download_chr1"
@@ -312,13 +307,8 @@
     {
       "id": "C1_chr2",
       "name": "GNOMAD_DOWNLOAD_CHR2",
-      "calls": [
-        [
-          "gnomAD_download_chrom",
-          "{config}",
-          "2"
-        ]
-      ],
+      "module": "modules/local/install_steps/gnomad_download.nf",
+      "process": "GNOMAD_DOWNLOAD",
       "needs": [],
       "outputs": [
         "gnomad_download_chr2"
@@ -331,13 +321,8 @@
     {
       "id": "C1_chr3",
       "name": "GNOMAD_DOWNLOAD_CHR3",
-      "calls": [
-        [
-          "gnomAD_download_chrom",
-          "{config}",
-          "3"
-        ]
-      ],
+      "module": "modules/local/install_steps/gnomad_download.nf",
+      "process": "GNOMAD_DOWNLOAD",
       "needs": [],
       "outputs": [
         "gnomad_download_chr3"
@@ -350,13 +335,8 @@
     {
       "id": "C1_chr4",
       "name": "GNOMAD_DOWNLOAD_CHR4",
-      "calls": [
-        [
-          "gnomAD_download_chrom",
-          "{config}",
-          "4"
-        ]
-      ],
+      "module": "modules/local/install_steps/gnomad_download.nf",
+      "process": "GNOMAD_DOWNLOAD",
       "needs": [],
       "outputs": [
         "gnomad_download_chr4"
@@ -369,13 +349,8 @@
     {
       "id": "C1_chr5",
       "name": "GNOMAD_DOWNLOAD_CHR5",
-      "calls": [
-        [
-          "gnomAD_download_chrom",
-          "{config}",
-          "5"
-        ]
-      ],
+      "module": "modules/local/install_steps/gnomad_download.nf",
+      "process": "GNOMAD_DOWNLOAD",
       "needs": [],
       "outputs": [
         "gnomad_download_chr5"
@@ -388,13 +363,8 @@
     {
       "id": "C1_chr6",
       "name": "GNOMAD_DOWNLOAD_CHR6",
-      "calls": [
-        [
-          "gnomAD_download_chrom",
-          "{config}",
-          "6"
-        ]
-      ],
+      "module": "modules/local/install_steps/gnomad_download.nf",
+      "process": "GNOMAD_DOWNLOAD",
       "needs": [],
       "outputs": [
         "gnomad_download_chr6"
@@ -407,13 +377,8 @@
     {
       "id": "C1_chr7",
       "name": "GNOMAD_DOWNLOAD_CHR7",
-      "calls": [
-        [
-          "gnomAD_download_chrom",
-          "{config}",
-          "7"
-        ]
-      ],
+      "module": "modules/local/install_steps/gnomad_download.nf",
+      "process": "GNOMAD_DOWNLOAD",
       "needs": [],
       "outputs": [
         "gnomad_download_chr7"
@@ -426,13 +391,8 @@
     {
       "id": "C1_chr8",
       "name": "GNOMAD_DOWNLOAD_CHR8",
-      "calls": [
-        [
-          "gnomAD_download_chrom",
-          "{config}",
-          "8"
-        ]
-      ],
+      "module": "modules/local/install_steps/gnomad_download.nf",
+      "process": "GNOMAD_DOWNLOAD",
       "needs": [],
       "outputs": [
         "gnomad_download_chr8"
@@ -445,13 +405,8 @@
     {
       "id": "C1_chr9",
       "name": "GNOMAD_DOWNLOAD_CHR9",
-      "calls": [
-        [
-          "gnomAD_download_chrom",
-          "{config}",
-          "9"
-        ]
-      ],
+      "module": "modules/local/install_steps/gnomad_download.nf",
+      "process": "GNOMAD_DOWNLOAD",
       "needs": [],
       "outputs": [
         "gnomad_download_chr9"
@@ -464,13 +419,8 @@
     {
       "id": "C1_chr10",
       "name": "GNOMAD_DOWNLOAD_CHR10",
-      "calls": [
-        [
-          "gnomAD_download_chrom",
-          "{config}",
-          "10"
-        ]
-      ],
+      "module": "modules/local/install_steps/gnomad_download.nf",
+      "process": "GNOMAD_DOWNLOAD",
       "needs": [],
       "outputs": [
         "gnomad_download_chr10"
@@ -483,13 +433,8 @@
     {
       "id": "C1_chr11",
       "name": "GNOMAD_DOWNLOAD_CHR11",
-      "calls": [
-        [
-          "gnomAD_download_chrom",
-          "{config}",
-          "11"
-        ]
-      ],
+      "module": "modules/local/install_steps/gnomad_download.nf",
+      "process": "GNOMAD_DOWNLOAD",
       "needs": [],
       "outputs": [
         "gnomad_download_chr11"
@@ -502,13 +447,8 @@
     {
       "id": "C1_chr12",
       "name": "GNOMAD_DOWNLOAD_CHR12",
-      "calls": [
-        [
-          "gnomAD_download_chrom",
-          "{config}",
-          "12"
-        ]
-      ],
+      "module": "modules/local/install_steps/gnomad_download.nf",
+      "process": "GNOMAD_DOWNLOAD",
       "needs": [],
       "outputs": [
         "gnomad_download_chr12"
@@ -521,13 +461,8 @@
     {
       "id": "C1_chr13",
       "name": "GNOMAD_DOWNLOAD_CHR13",
-      "calls": [
-        [
-          "gnomAD_download_chrom",
-          "{config}",
-          "13"
-        ]
-      ],
+      "module": "modules/local/install_steps/gnomad_download.nf",
+      "process": "GNOMAD_DOWNLOAD",
       "needs": [],
       "outputs": [
         "gnomad_download_chr13"
@@ -540,13 +475,8 @@
     {
       "id": "C1_chr14",
       "name": "GNOMAD_DOWNLOAD_CHR14",
-      "calls": [
-        [
-          "gnomAD_download_chrom",
-          "{config}",
-          "14"
-        ]
-      ],
+      "module": "modules/local/install_steps/gnomad_download.nf",
+      "process": "GNOMAD_DOWNLOAD",
       "needs": [],
       "outputs": [
         "gnomad_download_chr14"
@@ -559,13 +489,8 @@
     {
       "id": "C1_chr15",
       "name": "GNOMAD_DOWNLOAD_CHR15",
-      "calls": [
-        [
-          "gnomAD_download_chrom",
-          "{config}",
-          "15"
-        ]
-      ],
+      "module": "modules/local/install_steps/gnomad_download.nf",
+      "process": "GNOMAD_DOWNLOAD",
       "needs": [],
       "outputs": [
         "gnomad_download_chr15"
@@ -578,13 +503,8 @@
     {
       "id": "C1_chr16",
       "name": "GNOMAD_DOWNLOAD_CHR16",
-      "calls": [
-        [
-          "gnomAD_download_chrom",
-          "{config}",
-          "16"
-        ]
-      ],
+      "module": "modules/local/install_steps/gnomad_download.nf",
+      "process": "GNOMAD_DOWNLOAD",
       "needs": [],
       "outputs": [
         "gnomad_download_chr16"
@@ -597,13 +517,8 @@
     {
       "id": "C1_chr17",
       "name": "GNOMAD_DOWNLOAD_CHR17",
-      "calls": [
-        [
-          "gnomAD_download_chrom",
-          "{config}",
-          "17"
-        ]
-      ],
+      "module": "modules/local/install_steps/gnomad_download.nf",
+      "process": "GNOMAD_DOWNLOAD",
       "needs": [],
       "outputs": [
         "gnomad_download_chr17"
@@ -616,13 +531,8 @@
     {
       "id": "C1_chr18",
       "name": "GNOMAD_DOWNLOAD_CHR18",
-      "calls": [
-        [
-          "gnomAD_download_chrom",
-          "{config}",
-          "18"
-        ]
-      ],
+      "module": "modules/local/install_steps/gnomad_download.nf",
+      "process": "GNOMAD_DOWNLOAD",
       "needs": [],
       "outputs": [
         "gnomad_download_chr18"
@@ -635,13 +545,8 @@
     {
       "id": "C1_chr19",
       "name": "GNOMAD_DOWNLOAD_CHR19",
-      "calls": [
-        [
-          "gnomAD_download_chrom",
-          "{config}",
-          "19"
-        ]
-      ],
+      "module": "modules/local/install_steps/gnomad_download.nf",
+      "process": "GNOMAD_DOWNLOAD",
       "needs": [],
       "outputs": [
         "gnomad_download_chr19"
@@ -654,13 +559,8 @@
     {
       "id": "C1_chr20",
       "name": "GNOMAD_DOWNLOAD_CHR20",
-      "calls": [
-        [
-          "gnomAD_download_chrom",
-          "{config}",
-          "20"
-        ]
-      ],
+      "module": "modules/local/install_steps/gnomad_download.nf",
+      "process": "GNOMAD_DOWNLOAD",
       "needs": [],
       "outputs": [
         "gnomad_download_chr20"
@@ -673,13 +573,8 @@
     {
       "id": "C1_chr21",
       "name": "GNOMAD_DOWNLOAD_CHR21",
-      "calls": [
-        [
-          "gnomAD_download_chrom",
-          "{config}",
-          "21"
-        ]
-      ],
+      "module": "modules/local/install_steps/gnomad_download.nf",
+      "process": "GNOMAD_DOWNLOAD",
       "needs": [],
       "outputs": [
         "gnomad_download_chr21"
@@ -692,13 +587,8 @@
     {
       "id": "C1_chr22",
       "name": "GNOMAD_DOWNLOAD_CHR22",
-      "calls": [
-        [
-          "gnomAD_download_chrom",
-          "{config}",
-          "22"
-        ]
-      ],
+      "module": "modules/local/install_steps/gnomad_download.nf",
+      "process": "GNOMAD_DOWNLOAD",
       "needs": [],
       "outputs": [
         "gnomad_download_chr22"
@@ -711,13 +601,8 @@
     {
       "id": "C1_chrX",
       "name": "GNOMAD_DOWNLOAD_CHRX",
-      "calls": [
-        [
-          "gnomAD_download_chrom",
-          "{config}",
-          "X"
-        ]
-      ],
+      "module": "modules/local/install_steps/gnomad_download.nf",
+      "process": "GNOMAD_DOWNLOAD",
       "needs": [],
       "outputs": [
         "gnomad_download_chrX"
@@ -730,13 +615,8 @@
     {
       "id": "C1_chrY",
       "name": "GNOMAD_DOWNLOAD_CHRY",
-      "calls": [
-        [
-          "gnomAD_download_chrom",
-          "{config}",
-          "Y"
-        ]
-      ],
+      "module": "modules/local/install_steps/gnomad_download.nf",
+      "process": "GNOMAD_DOWNLOAD",
       "needs": [],
       "outputs": [
         "gnomad_download_chrY"
@@ -749,17 +629,7 @@
     {
       "id": "C1",
       "name": "GNOMAD",
-      "calls": [
-        [
-          "gnomAD_collect_chroms",
-          "{config}"
-        ],
-        [
-          "gnomAD_install",
-          "{config}",
-          "{ref_genome}"
-        ]
-      ],
+      "module": "modules/local/install_steps/gnomad.nf",
       "needs": [
         "A1",
         "C1_chr1",
@@ -787,11 +657,39 @@
         "C1_chrX",
         "C1_chrY"
       ],
+      "stage": [
+        "ref_genome",
+        "gnomad_download_chr1",
+        "gnomad_download_chr2",
+        "gnomad_download_chr3",
+        "gnomad_download_chr4",
+        "gnomad_download_chr5",
+        "gnomad_download_chr6",
+        "gnomad_download_chr7",
+        "gnomad_download_chr8",
+        "gnomad_download_chr9",
+        "gnomad_download_chr10",
+        "gnomad_download_chr11",
+        "gnomad_download_chr12",
+        "gnomad_download_chr13",
+        "gnomad_download_chr14",
+        "gnomad_download_chr15",
+        "gnomad_download_chr16",
+        "gnomad_download_chr17",
+        "gnomad_download_chr18",
+        "gnomad_download_chr19",
+        "gnomad_download_chr20",
+        "gnomad_download_chr21",
+        "gnomad_download_chr22",
+        "gnomad_download_chrX",
+        "gnomad_download_chrY"
+      ],
       "outputs": [
         "gnomad_vcf_chrX"
       ],
       "settings": [
-        "assembly"
+        "assembly",
+        "hg38_hg19_chain"
       ]
     },
     {
@@ -888,13 +786,7 @@
     {
       "id": "D0",
       "name": "CLINVAR_DOWNLOAD",
-      "calls": [
-        [
-          "ClinVar_download",
-          "--config",
-          "{config}"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_download.nf",
       "needs": [],
       "outputs": [
         "clinvar_release_inputs"

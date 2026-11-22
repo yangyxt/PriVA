@@ -14,6 +14,12 @@ ROOT = Path(__file__).resolve().parents[1]
 HEADER = ROOT / "tests" / "install_workflow_header.nf"
 
 
+def process(step: dict) -> str:
+    """The process a module step runs: its own name, or the process several
+    steps share (registry "process")."""
+    return step.get("process", step["name"])
+
+
 def render() -> str:
     reg = json.loads((ROOT / "conf" / "install_steps.json").read_text())
     steps = reg["steps"]
@@ -32,13 +38,13 @@ def render() -> str:
                 raise SystemExit(f"{s['id']} has a module and installer calls; a step is one or the other")
             if not s["module"].startswith("modules/local/install_steps/") or not module.is_file():
                 raise SystemExit(f"{s['id']}: its module {s['module']} is not a file of modules/local/install_steps/")
-            if not re.search(rf"^process {s['name']} \{{", module.read_text(), re.M):
-                raise SystemExit(f"{s['id']}: {s['module']} defines no process {s['name']}")
-        elif s.get("stage"):
-            raise SystemExit(f"{s['id']}: only a step with a module stages files")
+            if not re.search(rf"^process {process(s)} \{{", module.read_text(), re.M):
+                raise SystemExit(f"{s['id']}: {s['module']} defines no process {process(s)}")
+        elif s.get("stage") or s.get("process"):
+            raise SystemExit(f"{s['id']}: only a step with a module stages files or names a process")
     include = "; ".join(f"INSTALL_STEP as {alias(s)}" for s in steps if "module" not in s)
     modules = "\n".join(
-        f"include {{ {s['name']} as {alias(s)} }} from '../{s['module'][:-len('.nf')]}'"
+        f"include {{ {process(s)} as {alias(s)} }} from '../{s['module'][:-len('.nf')]}'"
         for s in steps if "module" in s)
     lines = [HEADER.read_text().replace("@INCLUDES@", include).replace("@PROCESS_INCLUDES@", modules).rstrip("\n")]
     for s in steps:

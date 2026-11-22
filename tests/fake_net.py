@@ -6,9 +6,14 @@ FOLDER``), first on PATH, it answers URL with the file FAKE_NET_ROOT/HOST/PATH
 (the query string left out; a PATH that ends in / is PATH/_index), so an
 install step's old shell function and its process can be run on the same
 bytes without the network. A missing file is
-the server's 404: curl -f exits 22, wget exits 8. Every request is appended to
-FAKE_NET_ROOT/requests.log.
+the server's 404: curl -f exits 22, wget exits 8. curl --include (-i) writes
+the reply's status line and headers before the body (Content-Length,
+Last-Modified from the file's time, an ETag from its bytes; a Range header is
+ignored, as some servers do), and a 404 is then a reply too: curl exits 0
+unless -f is given. Every request is appended to FAKE_NET_ROOT/requests.log.
 """
+import email.utils
+import hashlib
 import os
 import shutil
 import sys
@@ -31,23 +36,40 @@ def served(url: str) -> Path:
     return Path(os.environ["FAKE_NET_ROOT"]) / parts.netloc / path
 
 
-def answer(url: str, output: str | None) -> bool:
+def head(source: Path) -> bytes:
+    """The status line and headers of a reply with SOURCE (None: a 404)."""
+    if not source.is_file():
+        return b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"
+    body = source.read_bytes()
+    modified = email.utils.formatdate(source.stat().st_mtime, usegmt=True)
+    tag = hashlib.sha256(body).hexdigest()[:16]
+    return (f"HTTP/1.1 200 OK\r\nContent-Length: {len(body)}\r\nLast-Modified: {modified}\r\n"
+            f"ETag: \"{tag}\"\r\n\r\n").encode()
+
+
+def answer(url: str, output: str | None, include: bool = False, fail: bool = True) -> bool:
     root = Path(os.environ["FAKE_NET_ROOT"])
     with open(root / "requests.log", "a") as log:
         log.write(url + "\n")
     source = served(url)
-    if not source.is_file():
+    found = source.is_file()
+    if not found:
         print(f"fake_net: 404 {url}", file=sys.stderr)
-        return False
+        if fail or not include:
+            return False
+    reply = (head(source) if include else b"") + (source.read_bytes() if found else b"")
     if output in (None, "-"):
-        sys.stdout.buffer.write(source.read_bytes())
+        sys.stdout.buffer.write(reply)
+        sys.stdout.buffer.flush()
+    elif include:
+        Path(output).write_bytes(reply)
     else:
         shutil.copyfile(source, output)
     return True
 
 
 def curl(args: list[str]) -> int:
-    output, urls, at = None, [], 0
+    output, urls, at, flags = None, [], 0, set()
     while at < len(args):
         arg = args[at]
         if arg in CURL_VALUES:
@@ -55,12 +77,16 @@ def curl(args: list[str]) -> int:
                 output = args[at + 1]
             at += 2
             continue
-        if arg.startswith("-"):
-            at += 1
-            continue
-        urls.append(arg)
+        if arg.startswith("--"):
+            flags.add(arg)
+        elif arg.startswith("-"):
+            flags.update(f"-{letter}" for letter in arg[1:])
+        else:
+            urls.append(arg)
         at += 1
-    ok = all(answer(url, output) for url in urls)
+    include = bool(flags & {"--include", "-i"})
+    fail = bool(flags & {"--fail", "-f"})
+    ok = all(answer(url, output, include, fail or not include) for url in urls)
     return 0 if ok else 22
 
 

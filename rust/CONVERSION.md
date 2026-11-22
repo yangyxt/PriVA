@@ -1250,6 +1250,101 @@ Changes you can notice:
 - C4 no longer leaves the split pieces and GNU parallel's job logs in its
   folder.
 
+Part 4 moves the ClinVar annotation: the split (D1_split), VEP on each piece
+(D1_chr1 to D1_chrOther, 25 steps on one process, `CLINVAR_VEP_CHROM`; the
+piece is the step's id after `D1_`) and the gather with its statistics (D1).
+
+```mermaid
+flowchart LR
+  D0["D0: ClinVar release<br/>inputs.ready.json"] --> ren
+  subgraph split["D1_split"]
+    ren["bcftools annotate --rename-chrs<br/>(GRC_to_ucsc map), bcftools sort"] --> cut["awk: one plain VCF per chromosome<br/>chr1..chr22, chrX, chrY, chrOther"]
+    cut --> man["split.json: pieces, records,<br/>sha256 of all records"]
+  end
+  man --> w
+  subgraph chrom["D1_chr1 ... D1_chrOther (one process, 25 steps)"]
+    w["priva task step --step vep-worker<br/>(the vep command of anno_VEP_cache_worker,<br/>--fork 22; files of A1, A2, B1 to B9)"] --> bg["bgzip:<br/>clinvar.chrN.vep.vcf.gz"]
+  end
+  bg --> gat
+  subgraph D1["D1"]
+    same["the release renamed again:<br/>its records' hash = split.json's"] --> gat["headers alike apart from VEP's<br/>command line and time; records gathered,<br/>bcftools sort, tabix"]
+    gat --> gn["priva task step --step gnomad<br/>(C1's family)"]
+    gn --> aa["priva clinvar-aa-splice build"]
+    aa --> due{"priva clinvar-gene-refresh due"}
+    due -- preserve --> keep["the selected gene statistics<br/>(installer-prerequisites --stage clinvar)"]
+    due -- rebuild --> gs["priva clinvar-gene-stats build<br/>(D0's variant_summary and MANE)"]
+  end
+```
+
+| Step | Commands in the process |
+| --- | --- |
+| D1_split | `bcftools annotate --rename-chrs` with the shipped `GRC_to_ucsc.contig.map.txt`, `bcftools sort -T`, `tabix`; `awk` writes the 25 pieces and their counts; `sha256sum` of the records; `jq` writes `split.json`; `record --relocate` on it (the commands of `ClinVar_vep_split`) |
+| D1_chrN | `priva task step --step vep-worker`: the checks of `anno_VEP_cache_worker` (forks + 2 within `SLURM_CPUS_PER_TASK`, absolute paths, readable inputs, an output and stats file not there yet in a folder of yours), then its `vep` command line with `--fork 22`; a piece without records is copied as it is; `bgzip` |
+| D1 | `bcftools annotate --rename-chrs` and `sort` of D0's release, its records' hash checked against `split.json`; the pieces' headers compared; the records gathered, `bcftools sort -T`, `tabix`, `bcftools index -n` (the commands of `_ClinVar_vep_gather`); `priva clinvar-gene-refresh check-header` and `priva clinvar-contract header` (stages vep, complete, aa, gene); `priva task step --step gnomad`; `priva clinvar-aa-splice build` and `clinvar-contract cache`; `priva clinvar-gene-refresh due`, then `installer-prerequisites --stage clinvar` or `clinvar-gene-stats build` and `clinvar-contract cache` |
+
+`priva clinvar-gene-refresh due --config C --source-root R` is new: it prints
+the decision `clinvar-gene-refresh install` made inside the shell route, as
+JSON (`action`, `reason`, `selected`, `file_date`). The selected gene
+statistics stay when you set your own `clinvar_gene_stat`, when the automatic
+refresh is off (`cache_resources.json`, `clinvar_gene_statistics.refresh`), or
+until D0's release (its `##fileDate`) is `threshold_months` (3) calendar months
+newer than the bundled file; a missing bundled file is rebuilt.
+
+```
+ bundled clinvar_2star_stats.pkl.gz          D0's ##fileDate
+ ──────────────┬─────────────────────────────────┬──────────────▶ time
+               mtime ── + 3 calendar months ──▶ boundary
+ fileDate < boundary  →  preserve (record the bundled file)
+ fileDate ≥ boundary  →  rebuild  (data/ClinVar/clinvar_2star_stats.rkyv)
+```
+
+Compared with the shell functions (`tests/install_fixtures.py
+clinvar_release` now writes the variants of the `clinvar` fixture, with
+`CLNDN`, `GENEINFO` and records on X, Y, MT, an unplaced contig and an ALT of
+`.`, plus the variant_summary and MANE rows of its two genes;
+`vep_inputs` writes the B1, B4 and B5 to B9 receipts; the stand-in `vep` writes
+VEP's `##VEP-command-line`, skips a record whose ALT is `.` and adds the
+plugin fields, so C3's comparison now also needs `--volatile
+VEP-command-line`):
+
+| Step | Cases compared | Result |
+| --- | --- | --- |
+| D1_split | GRCh38 and GRCh37 | the same pieces and `split.json` apart from its own folder |
+| D1_chrN | all 25 pieces on GRCh38 and GRCh37 (filled and empty pieces, chrM and the contig in chrOther) | the same VEP output apart from VEP's command line (the paths it names) |
+| D1_chrN | `vep` failing; no MaveDB file (B6); `SLURM_CPUS_PER_TASK=8` for 22 forks | each stops both routes |
+| D1 | GRCh38 and GRCh37, gene statistics kept | the same annotated VCF apart from VEP's command line and the `##bcftools_*Command` lines (paths and dates); the same AA and splice statistics apart from the size of that VCF, which they record (`source_0_bytes`: the paths make the header longer); the same gene statistics (the bundled file) |
+| D1 | GRCh38 and GRCh37, the bundled file three months older than the release | both rebuild; the VCF and the AA and splice statistics as above; the gene statistics differ only in the threads they were built with (the old route took the configuration's 20, the new one the task's 1, and the archive records which: `source order` or `unordered worker completion`): built again from the new VCF with 20 threads they are the old route's bytes |
+| D1 | a piece missing (chr2); a release other than the one the split was made from (a record dropped) | each stops both routes, with the same reason |
+
+Changes you can notice:
+
+- The pieces are named after their chromosome (`clinvar.chrN.vep.vcf.gz`
+  and `clinvar.chrN.vep.stats.html`, not `output.vcf.gz`), so that D1 can
+  stage all 25 side by side.
+- D1 no longer writes the deployment's candidate and pair receipts
+  (`.installation-candidate.ready.json`, `.pair.ready.json`), the builder
+  identity file, the lock folder or a second copy of D0's VCF: the step
+  folder is new for every change of its inputs, so the reuse checks they
+  served are not needed. It keeps no per-chromosome gnomAD pieces or GNU
+  parallel logs; its folder holds the renamed release, the annotated VCF, the
+  two statistics and, when rebuilt, the gene statistics.
+- A `clinvar_vcf` in your configuration is no longer taken as an annotated
+  release to reuse untouched; adopt an existing installation with `--adopt`.
+- D1_chrN lists `pext_enabled` and `pext_tissues` under `settings` (VEP reads
+  them), D1 lists `priva_python_hash_seed` (the gene statistics read it); the
+  functions read them from the configuration without counting them.
+- The gather reads each piece's records with `awk` rather than `grep -v`,
+  which exits 1 for a piece whose records VEP all left out; `bcftools sort`
+  keeps its temporary files in the task folder (`-T`). D1's threads (the
+  gather, gnomAD and the statistics) are the task's CPUs, not the
+  configuration's `threads`.
+- Rebuilt gene statistics are written into D1's folder
+  (`data/ClinVar/clinvar_2star_stats.rkyv`) and recorded as
+  `clinvar_gene_stat`; the bundled file is never replaced, as before.
+- C4 and D0 get new lineages, so an existing installation runs them once
+  more: C4's code reaches `priva task step` (which gained `vep-worker`), D0's
+  reaches `clinvar-gene-refresh` (which gained `due`).
+
 ### Phases 3 to 7
 
 | Phase | Scope | Shell glue now | Python it still runs | Work (tools keep their commands) |
@@ -1257,7 +1352,7 @@ Changes you can notice:
 | 3 | Downloads: A1, A4, A5, B1, B2, B3, B5, B6, B7, B8, B9, D0, F1 | 4 to 10 functions each | `alternative_start_codon.py` (A4) | Each a Nextflow process: curl or git, then `priva install-task record` for the receipt. Done for A1, A4, B1, B2, B3, B5, B6, B7, B8, B9 and F1 (above); A4 no longer runs `alternative_start_codon.py`, whose pickle the Rust detector never reads |
 | 4 | Pipeline scripts: `annotation_vcf.sh` (1,827 lines), `filtration_vcf_per_fam.sh` (356), `prioritization_vcf_per_fam.sh` (430), `common_bash_utils.sh` (1,627) | run inside every analysis task | an inline `python - <<PY` block in `anno_VEP_cache_worker`, and `cadd_conda.py` (finds CADD's conda) | The annotation, filtration and prioritization tasks already exist per step; each runs VEP, bcftools, `CADD.sh` and `priva` with their own command lines instead of a shell function. `priva task run` keeps the task's checks and runs them, since which commands run depends on the settings. Done (above) for filtration, the prioritization steps and the six annotation steps; the scripts stay for the installer and `--phase annotation` until phase 6 |
 | 5 | Steps on native builders: A5 (moved from phase 3), C6, C8, C10, C11, D6, D8, D9, F4 to F10 | 7 to 19 functions each | `protein_domain_mapping.py` (C8's rebuild) | Each a process; F4's acquisition is curl and `priva gene-mechanism prepared`. Done (above), except F5's rebuild, which needs A2's two VEP caches and moves to phase 6 |
-| 6 | Heavy chains: A2, B4, C1, C3, C4, D0 (moved from phase 3), D1, E1, and F5's rebuild. Done (above): C1_chr*, C1, D0, A2, B4, C3 and C4 | 13 to 49 functions each | `cadd_scripts_install.py`, `cadd_prescore_index.py` (kept: they belong to CADD) | VEP, bcftools, CrossMap and `CADD.sh` command lines in the process; one change per step |
+| 6 | Heavy chains: A2, B4, C1, C3, C4, D0 (moved from phase 3), D1, E1, and F5's rebuild. Done (above): C1_chr*, C1, D0, A2, B4, C3, C4, D1_split, D1_chr* and D1 | 13 to 49 functions each | `cadd_scripts_install.py`, `cadd_prescore_index.py` (kept: they belong to CADD) | VEP, bcftools, CrossMap and `CADD.sh` command lines in the process; one change per step |
 | 7 | Remove the shell installer | `main_install`, `install_cluster.sh`, the `*.sbatch` scripts | | Delete `install_utils.sh` and the bash part of the digest |
 
 All seven phases are finished and checked end to end on the migration branch before any of it goes to `main`.

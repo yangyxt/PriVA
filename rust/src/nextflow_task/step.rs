@@ -14,6 +14,7 @@ pub(super) const STEPS: &[&str] = &[
     "clinvar",
     "control",
     "vep",
+    "vep-worker",
     "cadd",
     "filtration",
     "prioritization",
@@ -29,6 +30,7 @@ pub(super) fn required(step: &str) -> &'static [&'static str] {
         "preprocess" | "cadd" => &["vcf", "output"],
         "gnomad" | "clinvar" | "control" | "vep" | "filtration" => &["vcf"],
         "prioritization" | "combine" => &["vcf", "cadd"],
+        "vep-worker" => &["vcf", "output", "stats", "forks"],
         _ => &["table"],
     }
 }
@@ -62,6 +64,17 @@ pub(super) fn run(options: &Options) -> Result<()> {
         "clinvar" => clinvar::run(&context, value("vcf")),
         "control" => control::run(&context, value("vcf")),
         "vep" => vep::run(&context, value("vcf")),
+        // anno_VEP_cache_worker: VEP on one chromosome of the ClinVar release
+        // (install steps D1_chrN).
+        "vep-worker" => vep::worker(
+            &context,
+            value("vcf"),
+            &vep::Worker {
+                output: value("output"),
+                stats: value("stats"),
+                forks: value("forks"),
+            },
+        ),
         "filtration" => family::filtration(&context, value("vcf"), family_id),
         "prioritization" => family::prioritize(&context, value("vcf"), value("cadd"), family_id),
         "combine" => family::combine(&context, value("vcf"), value("cadd")),

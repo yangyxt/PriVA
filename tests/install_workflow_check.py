@@ -81,9 +81,13 @@ SHELL_LIBRARIES = ("install_utils.sh", "common_bash_utils.sh", "annotation_vcf.s
 RUN_ENTRIES = {"main_workflow", "anno_VEP_data"}
 # Rust code that only install_utils.sh runs: alpha-annotation-base, for
 # AlphaMissense_anno and the motif function, which no step calls since C3 runs
-# as its own process. It names installer functions to fingerprint their text,
-# not to run them, and goes with install_utils.sh in phase 7.
-SHELL_ONLY = {"rust/src/alpha_annotation_base/profile.rs", "rust/src/alpha_annotation_base/publication.rs"}
+# as its own process, and clinvar-gene-refresh install, deploy and the
+# candidate receipts, for ClinVar_install, which no step calls since D1 runs as
+# its own process. It names installer functions to fingerprint their text or
+# runs them from the shell, and goes with install_utils.sh in phase 7.
+SHELL_ONLY = {"rust/src/alpha_annotation_base/profile.rs", "rust/src/alpha_annotation_base/publication.rs",
+              "rust/src/clinvar_gene_refresh/deploy.rs", "rust/src/clinvar_gene_refresh/profile.rs",
+              "rust/src/clinvar_gene_refresh/refresh.rs"}
 WORD = r"[A-Za-z_][A-Za-z0-9_]*"
 
 

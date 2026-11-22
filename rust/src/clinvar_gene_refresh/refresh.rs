@@ -39,7 +39,7 @@ fn updates_of(value: &Json) -> Result<Vec<(String, Json)>> {
 }
 
 /// `clinvar_stats_path(config, source_root)` of installer_prerequisites.py.
-fn clinvar_stats_path(config: &Json, source_root: &str) -> Result<String> {
+pub(super) fn clinvar_stats_path(config: &Json, source_root: &str) -> Result<String> {
     let configured = get_or_null(config, "clinvar_gene_stat")?;
     let selected = if truth(&configured) {
         py_str(&configured)
@@ -55,7 +55,7 @@ fn clinvar_stats_path(config: &Json, source_root: &str) -> Result<String> {
 }
 
 /// `baseline_metadata(path)`: existence, size and mtime only.
-fn baseline_metadata(path: &str) -> Result<Json> {
+pub(super) fn baseline_metadata(path: &str) -> Result<Json> {
     let present = exists(path)?;
     let mut value = object([("path", string(path)), ("exists", Json::Bool(present))]);
     if !present {

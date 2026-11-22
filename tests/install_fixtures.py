@@ -37,7 +37,9 @@ and the like), so the steps that read them can be compared both ways:
       DIR/net/HOST/PATH: NCBI's weekly ClinVar VCFs of both assemblies (with
       a ##fileDate, a tabix index and the publisher's .md5), variant_summary
       (with its .md5) and MANE's summary, as the ClinVar download (D0) reads
-      them from the sources of cache_resources.json.
+      them from the sources of cache_resources.json. The VCFs hold the
+      variants of the clinvar fixture (two genes) and records on X, Y, MT
+      and an unplaced contig, for the ClinVar split, VEP and statistics (D1).
   python3 tests/install_fixtures.py vep --out DIR
       DIR/envs/priva_acmg: an environment (CONDA_PREFIX) whose bin/ holds
       stand-ins for vep, vep_install (Ensembl's INSTALL.pl), perl and conda,
@@ -55,6 +57,11 @@ and the like), so the steps that read them can be compared both ways:
       tabix-indexed, the variants of the alphamissense fixture) and a gnomAD
       family holding some of them: the inputs of the AlphaMissense
       annotation (C3) besides A2's, and of its gnomAD step (C4).
+  python3 tests/install_fixtures.py vep_inputs --out DIR
+      DIR/receipts/{B1,B4,B5,B6,B7,B8,B9}.{hg38,hg19}.json: small stand-ins
+      for the other plugin files of VEP's command line (UTRAnnotator,
+      SpliceAI, SpliceVault, MaveDB, PrimateAI, LOFTEE, pext), as the ClinVar
+      VEP steps (D1_chrN) read them besides alphamissense_inputs' receipts.
   python3 tests/install_fixtures.py spliceai --out DIR
       DIR/spliceai/v1/{snv,indel}.vcf.gz: SpliceAI v1 VCFs with tabix
       indexes (no assembly in their headers, so either assembly takes them),
@@ -153,7 +160,7 @@ def clinvar_records():
                       HGVSc=f"ENST00000000002.1:c.{pos - 4970}{ref}>{alt}",
                       HGVSp=f"ENSP00000000002.1:{aa}" if aa else "", Protein_position=f"{residue}/90" if aa else "",
                       SpliceAI_pred_DS_DL="0.91" if not aa else "0.00",
-                      SpliceVault_top_events="ES:2:5%" if not aa else "")
+                      SpliceVault_top_events="Top1:ES:2:5%:Frameshift" if not aa else "")
         rows.append(("chr2", pos, ref, alt, n, sig, stars, af, [csq(**fields)]))
     return rows
 
@@ -684,14 +691,33 @@ def write_clinvar_release(out: Path):
             Path(f"{path}.md5").write_text(f"{hashlib.md5(data).hexdigest()}  {path.name}\n")
         return path
 
+    # The variants of clinvar_records (GENEA on chromosome 1, GENEB on 2),
+    # and one record each on X, Y, MT, an unplaced contig and a record whose
+    # ALT is '.' (VEP writes none for it), so that the per-chromosome split
+    # (D1_split) fills some pieces, leaves the others empty and puts MT (chrM)
+    # and the contig in chrOther; the stand-in vep knows the consequences of
+    # the GENEA and GENEB variants, from which D1 builds its statistics.
+    records = [(chrom[3:], pos, ref, alt, f"ALLELEID={allele};CLNDN={'Disease_A' if chrom == 'chr1' else 'Disease_B'};"
+                f"CLNSIG={sig};CLNREVSTAT={stars};GENEINFO={'GENEA:1' if chrom == 'chr1' else 'GENEB:2'}")
+               for chrom, pos, ref, alt, allele, sig, stars, _af, _csq in clinvar_records()]
+    unknown = "CLNDN=not_provided;CLNSIG=Uncertain_significance;CLNREVSTAT=criteria_provided,_single_submitter"
+    records += [(contig, pos, ref, alt, f"ALLELEID={allele};{unknown}") for allele, (contig, pos, ref, alt) in enumerate(
+        [("2", 6000, "G", "."), ("X", 2000, "A", "G"), ("Y", 3000, "T", "C"), ("MT", 100, "G", "A"),
+         ("NT_187361.1", 50, "A", "C")], start=201)]
+    contigs = ["1", "2", "X", "Y", "MT", "NT_187361.1"]
+    records.sort(key=lambda r: (contigs.index(r[0]), r[1]))
     for assembly, contig_length in (("GRCh37", 249250621), ("GRCh38", 248956422)):
         lines = ["##fileformat=VCFv4.1", "##fileDate=2026-11-16", "##source=ClinVar",
+                 '##INFO=<ID=ALLELEID,Number=1,Type=Integer,Description="the ClinVar Allele ID">',
+                 '##INFO=<ID=CLNDN,Number=.,Type=String,Description="ClinVar\'s preferred disease name">',
                  '##INFO=<ID=CLNSIG,Number=.,Type=String,Description="Clinical significance">',
+                 '##INFO=<ID=CLNREVSTAT,Number=.,Type=String,Description="ClinVar review status">',
                  '##INFO=<ID=GENEINFO,Number=1,Type=String,Description="Gene">',
                  f"##contig=<ID=1,length={contig_length}>",
+                 *(f"##contig=<ID={contig}>" for contig in contigs[1:]),
                  "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO"]
-        for number, pos in enumerate((925952, 930165, 935222), start=1):
-            lines.append(f"1\t{pos}\t{number}\tG\tA\t.\t.\tCLNSIG=Pathogenic;GENEINFO=SAMD11:148398")
+        for number, (contig, pos, ref, alt, info) in enumerate(records, start=1):
+            lines.append(f"{contig}\t{pos}\t{number}\t{ref}\t{alt}\t.\t.\t{info}")
         plain = out / f"clinvar.{assembly}.vcf"
         out.mkdir(parents=True, exist_ok=True)
         plain.write_text("\n".join(lines) + "\n")
@@ -699,15 +725,22 @@ def write_clinvar_release(out: Path):
         plain.unlink()
         path = publish(template.format(assembly=assembly), vcf, manifest=True)
         subprocess.run(["tabix", "-f", "-p", "vcf", path], check=True)
-    summary = table(["#AlleleID", "Type", "Name", "GeneID", "GeneSymbol", "ClinicalSignificance", "Assembly"],
-                    [["1", "single nucleotide variant", "NM_152486.4(SAMD11):c.1A>G", "148398", "SAMD11",
-                      "Pathogenic", "GRCh38"]])
+    # variant_summary names each allele's RefSeq transcript, MANE maps it to
+    # the Ensembl transcript of the consequences (as the gene statistics read
+    # them; they take the GRCh38 rows whatever the assembly).
+    rows = []
+    for chrom, pos, ref, alt, allele, sig, _stars, _af, _csq in clinvar_records():
+        gene, number = ("GENEA", 1) if chrom == "chr1" else ("GENEB", 2)
+        for grch in ("GRCh37", "GRCh38"):
+            rows.append([str(allele), "single nucleotide variant", f"NM_00000{number}.1({gene}):c.{pos}{ref}>{alt}",
+                         str(number), gene, sig.replace("_", " "), grch])
+    summary = table(["#AlleleID", "Type", "Name", "GeneID", "GeneSymbol", "ClinicalSignificance", "Assembly"], rows)
     publish(summary_url, gzip.compress(summary.encode(), mtime=0), manifest=True)
     mane = table(["#NCBI_GeneID", "Ensembl_Gene", "HGNC_ID", "symbol", "name", "RefSeq_nuc", "RefSeq_prot",
                   "Ensembl_nuc", "Ensembl_prot", "MANE_status", "GRCh38_chr", "chr_start", "chr_end", "chr_strand"],
-                 [["GeneID:148398", "ENSG00000187634.13", "HGNC:28706", "SAMD11", "sterile alpha motif domain containing 11",
-                   "NM_001385641.1", "NP_001372570.1", "ENST00000616016.5", "ENSP00000478421.2", "MANE Select",
-                   "NC_000001.11", "925731", "944574", "+"]])
+                 [[f"GeneID:{n}", f"ENSG0000000000{n}.1", f"HGNC:{n}", gene, f"gene {gene[-1]}", f"NM_00000{n}.1",
+                   f"NP_00000{n}.1", f"ENST0000000000{n}.1", f"ENSP0000000000{n}.1", "MANE Select",
+                   f"NC_00000{n}.12", "900", "6000", "+"] for n, gene in ((1, "GENEA"), (2, "GENEB"))])
     publish(mane_url, gzip.compress(mane.encode(), mtime=0), manifest=False)
     print(net)
 
@@ -753,8 +786,11 @@ VEP = r"""#!/usr/bin/env python3
 # with the cache's transcripts (stand-in-transcripts.json beside it), the same
 # on every run: a ##VEP line naming the cache and the assembly, a CSQ field
 # per record (missense on a known transcript, else intergenic) and the
-# statistics file. FAKE_VEP_FAIL makes it fail; FAKE_VEP_DROP makes it lose
-# the first record.
+# statistics file. Like VEP it writes its command line (##VEP-command-line),
+# adds the fields of the plugins it is given and leaves out a record whose ALT
+# is '.'; it knows the consequences of the ClinVar fixtures' variants
+# (stand-in-consequences.json). FAKE_VEP_FAIL makes it fail;
+# FAKE_VEP_DROP makes it lose the first record.
 import gzip, json, os, sys
 from pathlib import Path
 args = sys.argv[1:]
@@ -776,9 +812,15 @@ cache = f"{value('--dir_cache')}/homo_sapiens_merged/116_{assembly}"
 plugins = [args[i + 1] for i, a in enumerate(args) if a == "-plugin"]
 conservation = any(p.startswith("Conservation,") for p in plugins)
 transcripts = json.loads((here / "stand-in-transcripts.json").read_text())
+consequences = json.loads((here / "stand-in-consequences.json").read_text())
 fields = ["Allele", "Consequence", "IMPACT", "SYMBOL", "Gene", "Feature_type", "Feature", "BIOTYPE",
           "EXON", "INTRON", "HGVSc", "HGVSp", "Protein_position", "Amino_acids", "DOMAINS", "CANONICAL"]
-fields += ["Conservation"] if conservation else []
+# The fields each plugin adds, in the order of the -plugin options.
+added = {"Conservation": ["Conservation"], "LoF": ["LoF", "LoF_filter", "LoF_flags", "LoF_info"],
+         "SpliceAI": [f"SpliceAI_pred_{k}_{e}" for k in ("DP", "DS") for e in ("AG", "AL", "DG", "DL")],
+         "SpliceVault": ["SpliceVault_SpliceAI_delta", "SpliceVault_top_events"], "NMD": ["NMD"]}
+for plugin in plugins:
+    fields += added.get(plugin.split(",")[0], [])
 source, target = value("-i"), value("-o")
 opener = gzip.open if source.endswith("gz") else open
 dropped = 0
@@ -789,9 +831,13 @@ with opener(source, "rt") as inp, open(target, "w") as out:
                       f'ensembl-variation=116.a1b2c3d ensembl-io=116.a1b2c3d ensembl-funcgen=116.a1b2c3d '
                       f'1000genomes="phase3" COSMIC="99" ClinVar="202504" dbSNP="156" gencode="GENCODE 48" '
                       f'genebuild="2014-07" gnomADe="v4.1" gnomADg="v4.1" assembly="{patch}"\n')
+            out.write("##VEP-command-line='vep " + " ".join(args) + "'\n")
             out.write('##INFO=<ID=CSQ,Number=.,Type=String,Description="Consequence annotations from Ensembl VEP. '
                       f'Format: {"|".join(fields)}">\n')
         elif not line.startswith("#"):
+            # VEP writes nothing for a record without an alternate allele.
+            if line.split("\t")[4] == ".":
+                continue
             if os.environ.get("FAKE_VEP_DROP") and dropped < 1:
                 dropped += 1
                 continue
@@ -799,6 +845,7 @@ with opener(source, "rt") as inp, open(target, "w") as out:
             info = dict(item.split("=", 1) for item in row[7].split(";") if "=" in item)
             known = transcripts.get(info.get("TRANSCRIPT", "").split(".")[0])
             values = dict(Allele=row[4], Consequence="intergenic_variant", IMPACT="MODIFIER")
+            values.update({k: v for k, v in consequences.get(":".join(row[:2] + row[3:5]), {}).items() if v})
             if known and "PVAR" in info:
                 residue = int(info["PVAR"][1:-1])
                 first, last = known["domain_residues"]
@@ -842,6 +889,11 @@ def write_vep(out: Path):
         transcript: dict(symbol=symbol, gene=gene, transcript=transcript, length=length, domain_residues=list(span),
                          domain=domain, exons=3)
         for _chrom, _start, symbol, gene, transcript, length, span, domain, _intolerant in AM_GENES}, indent=2) + "\n")
+    # The consequences of the ClinVar variants (clinvar_records), by
+    # CHROM:POS:REF:ALT.
+    (tools / "stand-in-consequences.json").write_text(json.dumps({
+        f"{chrom}:{pos}:{ref}:{alt}": dict(zip(CSQ, annotations[0].split("|")))
+        for chrom, pos, ref, alt, _allele, _sig, _stars, _af, annotations in clinvar_records()}, indent=2) + "\n")
     scripts = {
         "vep": VEP,
         "vep_install": VEP_INSTALL,
@@ -953,9 +1005,52 @@ def write_spliceai(out: Path, plugin=None):
     print(out / "spliceai")
 
 
+def write_vep_inputs(out: Path):
+    """The receipts of VEP's plugin files besides those of A1, A2, B2 and B3
+    (alphamissense_inputs): B1, B4, B5, B6, B7, B8 and B9 for each assembly,
+    small stand-in files (the stand-in vep reads none of them), as the ClinVar
+    VEP steps (D1_chrN) read them. MaveDB and LOFTEE's GERP bigWig are GRCh38
+    only, as their steps record them; pext has a mean track and two of the
+    three tissues of the base configuration."""
+    receipts = out / "receipts"
+    receipts.mkdir(parents=True, exist_ok=True)
+    for assembly in ("hg38", "hg19"):
+        grch = {"hg38": "GRCh38", "hg19": "GRCh37"}[assembly]
+
+        def write(step: str, name: str, files: dict, folders=(), others=()):
+            data = out / step / assembly / "data"
+            keys = {}
+            for key, relative in folders:
+                (data / relative).mkdir(parents=True, exist_ok=True)
+                keys[key] = data / relative
+            for key, relative in list(files.items()) + [(None, relative) for relative in others]:
+                path = data / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(f"stand-in {relative} of {grch}\n".encode())
+                if key:
+                    keys[key] = path
+            (receipts / f"{step}.{assembly}.json").write_text(json.dumps(
+                receipt(step, name, data.parent, keys), indent=2) + "\n")
+
+        write("B1", "UTR_ANNOTATOR", {"utr_annotator_file": f"UTRAnnotator/uORF_5UTR_{grch}_PUBLIC.txt"})
+        write("B4", "SPLICEAI", {"spliceai_snv_prescore": "SpliceAI/spliceai_scores.raw.snv.vcf.gz",
+                                 "spliceai_indel_prescore": "SpliceAI/spliceai_scores.raw.indel.vcf.gz"})
+        write("B5", "SPLICEVAULT", {"splicevault_prescore": f"SpliceVault/SpliceVault_data_{grch}.tsv.gz"})
+        write("B6", "MAVEDB", {"mavedb_file": "MaveDB/MaveDB_variants.tsv.gz"} if assembly == "hg38" else {})
+        write("B7", "PRIMATEAI", {"primateai_prescore": f"PrimateAI/PrimateAI_scores_v0.2_{grch}_sorted.tsv.bgz"})
+        loftee = {"human_ancestor_fasta": "LoF/human_ancestor.fa.gz", "loftee_conservation_file": "LoF/phylocsf_gerp.sql"}
+        if assembly == "hg38":
+            loftee["gerp_bigwig"] = "LoF/gerp_conservation_scores.homo_sapiens.bw"
+        write("B8", "LOFTEE", loftee, folders=[("loftee_repo", "LoF/loftee")])
+        write("B9", "PEXT", {"pext_mean_bw": f"pext/{assembly}/mean.bw"},
+              folders=[("pext_tissue_bw_dir", f"pext/{assembly}")],
+              others=[f"pext/{assembly}/tissues/Spleen.bw", f"pext/{assembly}/tissues/WholeBlood.bw"])
+    print(receipts)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("what", choices=["clinvar", "alphamissense", "mechanism", "nonlof", "ranking", "gnomad", "clinvar_release", "vep", "spliceai", "alphamissense_inputs"])
+    parser.add_argument("what", choices=["clinvar", "alphamissense", "mechanism", "nonlof", "ranking", "gnomad", "clinvar_release", "vep", "spliceai", "alphamissense_inputs", "vep_inputs"])
     parser.add_argument("--out", required=True)
     parser.add_argument("--plugin", help="spliceai: Ensembl's SpliceAI.pm of VEP 116 (VEP_plugins release/116)")
     args = parser.parse_args()
@@ -966,7 +1061,7 @@ def main():
      "mechanism": write_mechanism, "nonlof": write_nonlof,
      "ranking": write_ranking, "gnomad": write_gnomad,
      "clinvar_release": write_clinvar_release, "vep": write_vep,
-     "alphamissense_inputs": write_alphamissense_inputs}[args.what](out)
+     "alphamissense_inputs": write_alphamissense_inputs, "vep_inputs": write_vep_inputs}[args.what](out)
 
 
 if __name__ == "__main__":

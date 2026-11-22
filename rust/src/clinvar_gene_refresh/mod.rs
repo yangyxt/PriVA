@@ -20,6 +20,7 @@
 //! motif-runtime` observes its environment; nothing else runs in Python.
 //! Differences: temporary file and folder names carry six random characters.
 mod deploy;
+mod due;
 mod profile;
 mod refresh;
 mod remote;
@@ -51,10 +52,11 @@ const HELP: &str = "usage: priva clinvar-gene-refresh COMMAND [options]\n\
        download --config CONFIG --source-root ROOT --output FOLDER\n\
        file-date --input ANNOTATED_VCF\n\
        candidate-route --source-root ROOT\n\
+       due --config CONFIG --source-root ROOT\n\
        {candidate-begin,candidate-complete} --config CONFIG --source-root ROOT --input-vcf VCF\n\
 Refresh ClinVar gene statistics after three calendar months of source-data age; the\n\
 outputs and exit statuses of scripts/clinvar_gene_refresh.py. The subcommand comes first.";
-const COMMANDS: [&str; 12] = [
+const COMMANDS: [&str; 13] = [
     "plan",
     "install",
     "deploy",
@@ -67,6 +69,7 @@ const COMMANDS: [&str; 12] = [
     "candidate-route",
     "candidate-begin",
     "candidate-complete",
+    "due",
 ];
 
 fn error(category: &'static str, message: impl Into<String>) -> Box<dyn std::error::Error> {
@@ -593,6 +596,7 @@ fn run(command: &str, values: &HashMap<String, String>, chromosomes: Vec<String>
             None,
         )?),
         "candidate-route" => printed(&profile::candidate_route(&root)?),
+        "due" => printed(&due::due(&config, &root)?),
         "candidate-begin" => printed(&profile::candidate_begin(
             &config,
             &root,

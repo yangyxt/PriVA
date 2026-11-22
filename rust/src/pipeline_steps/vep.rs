@@ -6,11 +6,18 @@
 //!
 //! The function skipped a VCF that already had CSQ and was newer than the
 //! script; here, newer than the priva program that runs the step.
+//!
+//! [`worker`] is `anno_VEP_cache_worker` of the same script, which install
+//! steps D1_chr1 to D1_chrOther ran on each chromosome of the ClinVar
+//! release: the same checks and command line (one VEP command for the
+//! pipeline and for ClinVar), with the output, statistics file and forks it
+//! is given, without the SpliceAI version check, the skip and the sort.
 use super::annotation::vcf_assembly;
 use super::tools::{
     Context, Result, args, is_file, log, newer, quoted_path, random_tag, refuse, replace_vcf, words,
 };
-use std::path::Path;
+use std::os::unix::fs::MetadataExt;
+use std::path::{Component, Path};
 
 const MAVEDB_COLUMNS: &str =
     "urn:score:nt:pro:se:sd:df:epsilon:vtype:high_conf:pvalue:ci95_lower:ci95_upper";
@@ -84,9 +91,106 @@ fn tissues(value: &str) -> Vec<String> {
         .collect()
 }
 
+/// What `anno_VEP_cache_worker` is given besides the configuration and the
+/// input VCF: VEP's plain VCF output, its statistics file and its forks.
+pub(crate) struct Worker<'a> {
+    pub(crate) output: &'a str,
+    pub(crate) stats: &'a str,
+    pub(crate) forks: &'a str,
+}
+
 /// `anno_VEP_data --input_vcf VCF --config CONFIG --assembly ...
 /// --threads ...`, every other setting from the configuration.
 pub(crate) fn run(context: &Context, input: &str) -> Result<()> {
+    annotate(context, input, None)
+}
+
+/// `anno_VEP_cache_worker --config CONFIG --input-vcf VCF --output-vcf OUTPUT
+/// --stats-file STATS --forks N`: its checks of the paths and forks, then
+/// VEP on VCF into OUTPUT, which it leaves unsorted.
+pub(crate) fn worker(context: &Context, input: &str, given: &Worker) -> Result<()> {
+    check_worker(context, input, given)?;
+    annotate(context, input, Some(given))
+}
+
+/// The worker's own checks (its PY_VALIDATE): positive forks, within
+/// SLURM_CPUS_PER_TASK with one more child and the parent when it is set;
+/// absolute paths; a regular readable configuration and input; a fresh plain
+/// .vcf output and another statistics file, in existing folders of this user
+/// reached without links.
+fn check_worker(context: &Context, input: &str, given: &Worker) -> Result<()> {
+    let positive = |text: &str| {
+        text.bytes()
+            .next()
+            .is_some_and(|b| (b'1'..=b'9').contains(&b))
+            && text.bytes().all(|b| b.is_ascii_digit())
+    };
+    if !positive(given.forks) {
+        return refuse("VEP worker forks must be a positive integer");
+    }
+    if let Some(cpus) = std::env::var_os("SLURM_CPUS_PER_TASK") {
+        let cpus = cpus.to_string_lossy().into_owned();
+        // Python's int(): any number of digits.
+        let number = |text: &str| text.parse::<num_bigint::BigUint>().ok();
+        let fits = positive(&cpus)
+            && match (number(given.forks), number(&cpus)) {
+                (Some(forks), Some(cpus)) => forks + 2u32 <= cpus,
+                _ => false,
+            };
+        if !fits {
+            return refuse(
+                "VEP worker requires forks + one additional child + parent CPU within SLURM_CPUS_PER_TASK",
+            );
+        }
+    }
+    let config = context.config_text();
+    let paths = [config.as_str(), input, given.output, given.stats];
+    if paths.iter().any(|path| !Path::new(path).is_absolute()) {
+        return refuse("VEP worker paths must be absolute");
+    }
+    for path in [config.as_str(), input] {
+        let regular = std::fs::symlink_metadata(path)
+            .map(|m| m.file_type().is_file())
+            .map_err(|e| format!("{path}: {e}"))?;
+        let readable = std::ffi::CString::new(path)
+            .map(|c| unsafe { libc::access(c.as_ptr(), libc::R_OK) } == 0)
+            .unwrap_or(false);
+        if !regular || !readable {
+            return refuse(format!(
+                "VEP worker requires a readable regular input/config: {path}"
+            ));
+        }
+    }
+    let output = Path::new(given.output);
+    if output.extension().is_none_or(|e| e != "vcf") || given.output == given.stats {
+        return refuse("VEP worker needs a plain .vcf output and a distinct stats path");
+    }
+    let uid = unsafe { libc::getuid() };
+    for path in [given.output, given.stats] {
+        let path = Path::new(path);
+        let parent = path.parent().unwrap_or(Path::new("/"));
+        let owned = !path.components().any(|c| c == Component::ParentDir)
+            && std::fs::canonicalize(parent).map_err(|e| format!("{}: {e}", parent.display()))?
+                == parent
+            && parent.is_dir()
+            && std::fs::metadata(parent).is_ok_and(|m| m.uid() == uid);
+        if !owned {
+            return refuse(
+                "VEP worker output parents must be existing owned directories without symlink aliases",
+            );
+        }
+        if std::fs::symlink_metadata(path).is_ok() {
+            return refuse(format!(
+                "VEP worker output/stats must be fresh: {}",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The body both share (`_priva_anno_VEP_data`).
+fn annotate(context: &Context, input: &str, worker: Option<&Worker>) -> Result<()> {
     let v = |key: &str| context.value(key);
     let config = context.config_text();
     let mut assembly = v("assembly");
@@ -94,8 +198,9 @@ pub(crate) fn run(context: &Context, input: &str) -> Result<()> {
     let cache = v("vep_cache_dir");
     let plugins = v("vep_plugins_dir");
     let plugins_cache = v("vep_plugins_cachedir");
-    // The wrapper always passed --threads, so argparse's int() read it.
-    let configured = v("threads");
+    // The wrapper always passed --threads, so argparse's int() read it; the
+    // worker passed its forks.
+    let configured = worker.map_or_else(|| v("threads"), |w| w.forks.to_owned());
     let Some(threads) = python_int(&configured) else {
         return refuse(format!(
             "argument --threads: invalid int value: '{configured}'"
@@ -121,11 +226,14 @@ pub(crate) fn run(context: &Context, input: &str) -> Result<()> {
     let pext_dir = v("pext_tissue_bw_dir");
     let pext_tissues = v("pext_tissues");
 
-    // priva_check_spliceai_versions: both score files the same version.
-    if !context.priva_succeeds(
-        "spliceai-cutoffs",
-        &[&config, &spliceai_snv, &spliceai_indel],
-    ) {
+    // priva_check_spliceai_versions: both score files the same version (the
+    // run of an analysis only).
+    if worker.is_none()
+        && !context.priva_succeeds(
+            "spliceai-cutoffs",
+            &[&config, &spliceai_snv, &spliceai_indel],
+        )
+    {
         return refuse("The SpliceAI score files cannot be used");
     }
 
@@ -218,15 +326,20 @@ pub(crate) fn run(context: &Context, input: &str) -> Result<()> {
         }
         return refuse(format!("VEP cannot run: {}", errors.join("; ")));
     }
-    if context.has_info_tags(input, "CSQ") && newer(input, context.binary) {
+    if worker.is_none() && context.has_info_tags(input, "CSQ") && newer(input, context.binary) {
         log(&format!(
             "The input vcf {input} is already annotated by VEP. Skip this step"
         ));
         return Ok(());
     }
 
-    let output = replace_vcf(input, &format!(".{}.vcf", random_tag()));
-    let stats = replace_vcf(input, ".vep.stats.html");
+    let (output, stats) = match worker {
+        Some(given) => (given.output.to_owned(), given.stats.to_owned()),
+        None => (
+            replace_vcf(input, &format!(".{}.vcf", random_tag())),
+            replace_vcf(input, ".vep.stats.html"),
+        ),
+    };
     let mut command = args(&[
         "-i",
         input,
@@ -285,6 +398,9 @@ pub(crate) fn run(context: &Context, input: &str) -> Result<()> {
     command.extend(args(&["--force_overwrite", "-o", &output]));
     if !context.succeeds("vep", &command) {
         return refuse(format!("VEP failed on {input}"));
+    }
+    if worker.is_some() {
+        return Ok(());
     }
     let sorted = replace_vcf(input, ".vcf.gz");
     if !context.succeeds("bcftools", &args(&["sort", "-Oz", "-o", &sorted, &output]))

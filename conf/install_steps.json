@@ -780,14 +780,12 @@
     {
       "id": "D1_split",
       "name": "CLINVAR_VEP_SPLIT",
-      "calls": [
-        [
-          "ClinVar_vep_split",
-          "{config}"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_vep_split.nf",
       "needs": [
         "D0"
+      ],
+      "stage": [
+        "clinvar_release_inputs"
       ],
       "outputs": [
         "clinvar_vep_split"
@@ -799,13 +797,8 @@
     {
       "id": "D1_chr1",
       "name": "CLINVAR_VEP_CHR1",
-      "calls": [
-        [
-          "ClinVar_vep_chrom",
-          "{config}",
-          "chr1"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_vep_chrom.nf",
+      "process": "CLINVAR_VEP_CHROM",
       "needs": [
         "A1",
         "A2",
@@ -819,25 +812,42 @@
         "B8",
         "B9",
         "D1_split"
+      ],
+      "stage": [
+        "clinvar_vep_split",
+        "ref_genome",
+        "vep_cache_dir",
+        "vep_plugins_dir",
+        "utr_annotator_file",
+        "conservation_file",
+        "alphamissense_prescore",
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore",
+        "splicevault_prescore",
+        "mavedb_file",
+        "primateai_prescore",
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file",
+        "gerp_bigwig",
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
       ],
       "outputs": [
         "clinvar_vep_chr1"
       ],
       "settings": [
         "assembly",
-        "vep_installed_version"
+        "vep_installed_version",
+        "pext_enabled",
+        "pext_tissues"
       ]
     },
     {
       "id": "D1_chr2",
       "name": "CLINVAR_VEP_CHR2",
-      "calls": [
-        [
-          "ClinVar_vep_chrom",
-          "{config}",
-          "chr2"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_vep_chrom.nf",
+      "process": "CLINVAR_VEP_CHROM",
       "needs": [
         "A1",
         "A2",
@@ -851,25 +861,42 @@
         "B8",
         "B9",
         "D1_split"
+      ],
+      "stage": [
+        "clinvar_vep_split",
+        "ref_genome",
+        "vep_cache_dir",
+        "vep_plugins_dir",
+        "utr_annotator_file",
+        "conservation_file",
+        "alphamissense_prescore",
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore",
+        "splicevault_prescore",
+        "mavedb_file",
+        "primateai_prescore",
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file",
+        "gerp_bigwig",
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
       ],
       "outputs": [
         "clinvar_vep_chr2"
       ],
       "settings": [
         "assembly",
-        "vep_installed_version"
+        "vep_installed_version",
+        "pext_enabled",
+        "pext_tissues"
       ]
     },
     {
       "id": "D1_chr3",
       "name": "CLINVAR_VEP_CHR3",
-      "calls": [
-        [
-          "ClinVar_vep_chrom",
-          "{config}",
-          "chr3"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_vep_chrom.nf",
+      "process": "CLINVAR_VEP_CHROM",
       "needs": [
         "A1",
         "A2",
@@ -883,25 +910,42 @@
         "B8",
         "B9",
         "D1_split"
+      ],
+      "stage": [
+        "clinvar_vep_split",
+        "ref_genome",
+        "vep_cache_dir",
+        "vep_plugins_dir",
+        "utr_annotator_file",
+        "conservation_file",
+        "alphamissense_prescore",
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore",
+        "splicevault_prescore",
+        "mavedb_file",
+        "primateai_prescore",
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file",
+        "gerp_bigwig",
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
       ],
       "outputs": [
         "clinvar_vep_chr3"
       ],
       "settings": [
         "assembly",
-        "vep_installed_version"
+        "vep_installed_version",
+        "pext_enabled",
+        "pext_tissues"
       ]
     },
     {
       "id": "D1_chr4",
       "name": "CLINVAR_VEP_CHR4",
-      "calls": [
-        [
-          "ClinVar_vep_chrom",
-          "{config}",
-          "chr4"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_vep_chrom.nf",
+      "process": "CLINVAR_VEP_CHROM",
       "needs": [
         "A1",
         "A2",
@@ -915,25 +959,42 @@
         "B8",
         "B9",
         "D1_split"
+      ],
+      "stage": [
+        "clinvar_vep_split",
+        "ref_genome",
+        "vep_cache_dir",
+        "vep_plugins_dir",
+        "utr_annotator_file",
+        "conservation_file",
+        "alphamissense_prescore",
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore",
+        "splicevault_prescore",
+        "mavedb_file",
+        "primateai_prescore",
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file",
+        "gerp_bigwig",
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
       ],
       "outputs": [
         "clinvar_vep_chr4"
       ],
       "settings": [
         "assembly",
-        "vep_installed_version"
+        "vep_installed_version",
+        "pext_enabled",
+        "pext_tissues"
       ]
     },
     {
       "id": "D1_chr5",
       "name": "CLINVAR_VEP_CHR5",
-      "calls": [
-        [
-          "ClinVar_vep_chrom",
-          "{config}",
-          "chr5"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_vep_chrom.nf",
+      "process": "CLINVAR_VEP_CHROM",
       "needs": [
         "A1",
         "A2",
@@ -947,25 +1008,42 @@
         "B8",
         "B9",
         "D1_split"
+      ],
+      "stage": [
+        "clinvar_vep_split",
+        "ref_genome",
+        "vep_cache_dir",
+        "vep_plugins_dir",
+        "utr_annotator_file",
+        "conservation_file",
+        "alphamissense_prescore",
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore",
+        "splicevault_prescore",
+        "mavedb_file",
+        "primateai_prescore",
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file",
+        "gerp_bigwig",
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
       ],
       "outputs": [
         "clinvar_vep_chr5"
       ],
       "settings": [
         "assembly",
-        "vep_installed_version"
+        "vep_installed_version",
+        "pext_enabled",
+        "pext_tissues"
       ]
     },
     {
       "id": "D1_chr6",
       "name": "CLINVAR_VEP_CHR6",
-      "calls": [
-        [
-          "ClinVar_vep_chrom",
-          "{config}",
-          "chr6"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_vep_chrom.nf",
+      "process": "CLINVAR_VEP_CHROM",
       "needs": [
         "A1",
         "A2",
@@ -979,25 +1057,42 @@
         "B8",
         "B9",
         "D1_split"
+      ],
+      "stage": [
+        "clinvar_vep_split",
+        "ref_genome",
+        "vep_cache_dir",
+        "vep_plugins_dir",
+        "utr_annotator_file",
+        "conservation_file",
+        "alphamissense_prescore",
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore",
+        "splicevault_prescore",
+        "mavedb_file",
+        "primateai_prescore",
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file",
+        "gerp_bigwig",
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
       ],
       "outputs": [
         "clinvar_vep_chr6"
       ],
       "settings": [
         "assembly",
-        "vep_installed_version"
+        "vep_installed_version",
+        "pext_enabled",
+        "pext_tissues"
       ]
     },
     {
       "id": "D1_chr7",
       "name": "CLINVAR_VEP_CHR7",
-      "calls": [
-        [
-          "ClinVar_vep_chrom",
-          "{config}",
-          "chr7"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_vep_chrom.nf",
+      "process": "CLINVAR_VEP_CHROM",
       "needs": [
         "A1",
         "A2",
@@ -1011,25 +1106,42 @@
         "B8",
         "B9",
         "D1_split"
+      ],
+      "stage": [
+        "clinvar_vep_split",
+        "ref_genome",
+        "vep_cache_dir",
+        "vep_plugins_dir",
+        "utr_annotator_file",
+        "conservation_file",
+        "alphamissense_prescore",
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore",
+        "splicevault_prescore",
+        "mavedb_file",
+        "primateai_prescore",
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file",
+        "gerp_bigwig",
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
       ],
       "outputs": [
         "clinvar_vep_chr7"
       ],
       "settings": [
         "assembly",
-        "vep_installed_version"
+        "vep_installed_version",
+        "pext_enabled",
+        "pext_tissues"
       ]
     },
     {
       "id": "D1_chr8",
       "name": "CLINVAR_VEP_CHR8",
-      "calls": [
-        [
-          "ClinVar_vep_chrom",
-          "{config}",
-          "chr8"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_vep_chrom.nf",
+      "process": "CLINVAR_VEP_CHROM",
       "needs": [
         "A1",
         "A2",
@@ -1043,25 +1155,42 @@
         "B8",
         "B9",
         "D1_split"
+      ],
+      "stage": [
+        "clinvar_vep_split",
+        "ref_genome",
+        "vep_cache_dir",
+        "vep_plugins_dir",
+        "utr_annotator_file",
+        "conservation_file",
+        "alphamissense_prescore",
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore",
+        "splicevault_prescore",
+        "mavedb_file",
+        "primateai_prescore",
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file",
+        "gerp_bigwig",
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
       ],
       "outputs": [
         "clinvar_vep_chr8"
       ],
       "settings": [
         "assembly",
-        "vep_installed_version"
+        "vep_installed_version",
+        "pext_enabled",
+        "pext_tissues"
       ]
     },
     {
       "id": "D1_chr9",
       "name": "CLINVAR_VEP_CHR9",
-      "calls": [
-        [
-          "ClinVar_vep_chrom",
-          "{config}",
-          "chr9"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_vep_chrom.nf",
+      "process": "CLINVAR_VEP_CHROM",
       "needs": [
         "A1",
         "A2",
@@ -1075,25 +1204,42 @@
         "B8",
         "B9",
         "D1_split"
+      ],
+      "stage": [
+        "clinvar_vep_split",
+        "ref_genome",
+        "vep_cache_dir",
+        "vep_plugins_dir",
+        "utr_annotator_file",
+        "conservation_file",
+        "alphamissense_prescore",
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore",
+        "splicevault_prescore",
+        "mavedb_file",
+        "primateai_prescore",
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file",
+        "gerp_bigwig",
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
       ],
       "outputs": [
         "clinvar_vep_chr9"
       ],
       "settings": [
         "assembly",
-        "vep_installed_version"
+        "vep_installed_version",
+        "pext_enabled",
+        "pext_tissues"
       ]
     },
     {
       "id": "D1_chr10",
       "name": "CLINVAR_VEP_CHR10",
-      "calls": [
-        [
-          "ClinVar_vep_chrom",
-          "{config}",
-          "chr10"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_vep_chrom.nf",
+      "process": "CLINVAR_VEP_CHROM",
       "needs": [
         "A1",
         "A2",
@@ -1107,25 +1253,42 @@
         "B8",
         "B9",
         "D1_split"
+      ],
+      "stage": [
+        "clinvar_vep_split",
+        "ref_genome",
+        "vep_cache_dir",
+        "vep_plugins_dir",
+        "utr_annotator_file",
+        "conservation_file",
+        "alphamissense_prescore",
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore",
+        "splicevault_prescore",
+        "mavedb_file",
+        "primateai_prescore",
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file",
+        "gerp_bigwig",
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
       ],
       "outputs": [
         "clinvar_vep_chr10"
       ],
       "settings": [
         "assembly",
-        "vep_installed_version"
+        "vep_installed_version",
+        "pext_enabled",
+        "pext_tissues"
       ]
     },
     {
       "id": "D1_chr11",
       "name": "CLINVAR_VEP_CHR11",
-      "calls": [
-        [
-          "ClinVar_vep_chrom",
-          "{config}",
-          "chr11"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_vep_chrom.nf",
+      "process": "CLINVAR_VEP_CHROM",
       "needs": [
         "A1",
         "A2",
@@ -1139,25 +1302,42 @@
         "B8",
         "B9",
         "D1_split"
+      ],
+      "stage": [
+        "clinvar_vep_split",
+        "ref_genome",
+        "vep_cache_dir",
+        "vep_plugins_dir",
+        "utr_annotator_file",
+        "conservation_file",
+        "alphamissense_prescore",
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore",
+        "splicevault_prescore",
+        "mavedb_file",
+        "primateai_prescore",
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file",
+        "gerp_bigwig",
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
       ],
       "outputs": [
         "clinvar_vep_chr11"
       ],
       "settings": [
         "assembly",
-        "vep_installed_version"
+        "vep_installed_version",
+        "pext_enabled",
+        "pext_tissues"
       ]
     },
     {
       "id": "D1_chr12",
       "name": "CLINVAR_VEP_CHR12",
-      "calls": [
-        [
-          "ClinVar_vep_chrom",
-          "{config}",
-          "chr12"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_vep_chrom.nf",
+      "process": "CLINVAR_VEP_CHROM",
       "needs": [
         "A1",
         "A2",
@@ -1171,25 +1351,42 @@
         "B8",
         "B9",
         "D1_split"
+      ],
+      "stage": [
+        "clinvar_vep_split",
+        "ref_genome",
+        "vep_cache_dir",
+        "vep_plugins_dir",
+        "utr_annotator_file",
+        "conservation_file",
+        "alphamissense_prescore",
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore",
+        "splicevault_prescore",
+        "mavedb_file",
+        "primateai_prescore",
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file",
+        "gerp_bigwig",
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
       ],
       "outputs": [
         "clinvar_vep_chr12"
       ],
       "settings": [
         "assembly",
-        "vep_installed_version"
+        "vep_installed_version",
+        "pext_enabled",
+        "pext_tissues"
       ]
     },
     {
       "id": "D1_chr13",
       "name": "CLINVAR_VEP_CHR13",
-      "calls": [
-        [
-          "ClinVar_vep_chrom",
-          "{config}",
-          "chr13"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_vep_chrom.nf",
+      "process": "CLINVAR_VEP_CHROM",
       "needs": [
         "A1",
         "A2",
@@ -1203,25 +1400,42 @@
         "B8",
         "B9",
         "D1_split"
+      ],
+      "stage": [
+        "clinvar_vep_split",
+        "ref_genome",
+        "vep_cache_dir",
+        "vep_plugins_dir",
+        "utr_annotator_file",
+        "conservation_file",
+        "alphamissense_prescore",
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore",
+        "splicevault_prescore",
+        "mavedb_file",
+        "primateai_prescore",
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file",
+        "gerp_bigwig",
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
       ],
       "outputs": [
         "clinvar_vep_chr13"
       ],
       "settings": [
         "assembly",
-        "vep_installed_version"
+        "vep_installed_version",
+        "pext_enabled",
+        "pext_tissues"
       ]
     },
     {
       "id": "D1_chr14",
       "name": "CLINVAR_VEP_CHR14",
-      "calls": [
-        [
-          "ClinVar_vep_chrom",
-          "{config}",
-          "chr14"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_vep_chrom.nf",
+      "process": "CLINVAR_VEP_CHROM",
       "needs": [
         "A1",
         "A2",
@@ -1235,25 +1449,42 @@
         "B8",
         "B9",
         "D1_split"
+      ],
+      "stage": [
+        "clinvar_vep_split",
+        "ref_genome",
+        "vep_cache_dir",
+        "vep_plugins_dir",
+        "utr_annotator_file",
+        "conservation_file",
+        "alphamissense_prescore",
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore",
+        "splicevault_prescore",
+        "mavedb_file",
+        "primateai_prescore",
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file",
+        "gerp_bigwig",
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
       ],
       "outputs": [
         "clinvar_vep_chr14"
       ],
       "settings": [
         "assembly",
-        "vep_installed_version"
+        "vep_installed_version",
+        "pext_enabled",
+        "pext_tissues"
       ]
     },
     {
       "id": "D1_chr15",
       "name": "CLINVAR_VEP_CHR15",
-      "calls": [
-        [
-          "ClinVar_vep_chrom",
-          "{config}",
-          "chr15"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_vep_chrom.nf",
+      "process": "CLINVAR_VEP_CHROM",
       "needs": [
         "A1",
         "A2",
@@ -1267,25 +1498,42 @@
         "B8",
         "B9",
         "D1_split"
+      ],
+      "stage": [
+        "clinvar_vep_split",
+        "ref_genome",
+        "vep_cache_dir",
+        "vep_plugins_dir",
+        "utr_annotator_file",
+        "conservation_file",
+        "alphamissense_prescore",
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore",
+        "splicevault_prescore",
+        "mavedb_file",
+        "primateai_prescore",
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file",
+        "gerp_bigwig",
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
       ],
       "outputs": [
         "clinvar_vep_chr15"
       ],
       "settings": [
         "assembly",
-        "vep_installed_version"
+        "vep_installed_version",
+        "pext_enabled",
+        "pext_tissues"
       ]
     },
     {
       "id": "D1_chr16",
       "name": "CLINVAR_VEP_CHR16",
-      "calls": [
-        [
-          "ClinVar_vep_chrom",
-          "{config}",
-          "chr16"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_vep_chrom.nf",
+      "process": "CLINVAR_VEP_CHROM",
       "needs": [
         "A1",
         "A2",
@@ -1299,25 +1547,42 @@
         "B8",
         "B9",
         "D1_split"
+      ],
+      "stage": [
+        "clinvar_vep_split",
+        "ref_genome",
+        "vep_cache_dir",
+        "vep_plugins_dir",
+        "utr_annotator_file",
+        "conservation_file",
+        "alphamissense_prescore",
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore",
+        "splicevault_prescore",
+        "mavedb_file",
+        "primateai_prescore",
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file",
+        "gerp_bigwig",
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
       ],
       "outputs": [
         "clinvar_vep_chr16"
       ],
       "settings": [
         "assembly",
-        "vep_installed_version"
+        "vep_installed_version",
+        "pext_enabled",
+        "pext_tissues"
       ]
     },
     {
       "id": "D1_chr17",
       "name": "CLINVAR_VEP_CHR17",
-      "calls": [
-        [
-          "ClinVar_vep_chrom",
-          "{config}",
-          "chr17"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_vep_chrom.nf",
+      "process": "CLINVAR_VEP_CHROM",
       "needs": [
         "A1",
         "A2",
@@ -1331,25 +1596,42 @@
         "B8",
         "B9",
         "D1_split"
+      ],
+      "stage": [
+        "clinvar_vep_split",
+        "ref_genome",
+        "vep_cache_dir",
+        "vep_plugins_dir",
+        "utr_annotator_file",
+        "conservation_file",
+        "alphamissense_prescore",
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore",
+        "splicevault_prescore",
+        "mavedb_file",
+        "primateai_prescore",
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file",
+        "gerp_bigwig",
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
       ],
       "outputs": [
         "clinvar_vep_chr17"
       ],
       "settings": [
         "assembly",
-        "vep_installed_version"
+        "vep_installed_version",
+        "pext_enabled",
+        "pext_tissues"
       ]
     },
     {
       "id": "D1_chr18",
       "name": "CLINVAR_VEP_CHR18",
-      "calls": [
-        [
-          "ClinVar_vep_chrom",
-          "{config}",
-          "chr18"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_vep_chrom.nf",
+      "process": "CLINVAR_VEP_CHROM",
       "needs": [
         "A1",
         "A2",
@@ -1363,25 +1645,42 @@
         "B8",
         "B9",
         "D1_split"
+      ],
+      "stage": [
+        "clinvar_vep_split",
+        "ref_genome",
+        "vep_cache_dir",
+        "vep_plugins_dir",
+        "utr_annotator_file",
+        "conservation_file",
+        "alphamissense_prescore",
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore",
+        "splicevault_prescore",
+        "mavedb_file",
+        "primateai_prescore",
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file",
+        "gerp_bigwig",
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
       ],
       "outputs": [
         "clinvar_vep_chr18"
       ],
       "settings": [
         "assembly",
-        "vep_installed_version"
+        "vep_installed_version",
+        "pext_enabled",
+        "pext_tissues"
       ]
     },
     {
       "id": "D1_chr19",
       "name": "CLINVAR_VEP_CHR19",
-      "calls": [
-        [
-          "ClinVar_vep_chrom",
-          "{config}",
-          "chr19"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_vep_chrom.nf",
+      "process": "CLINVAR_VEP_CHROM",
       "needs": [
         "A1",
         "A2",
@@ -1395,25 +1694,42 @@
         "B8",
         "B9",
         "D1_split"
+      ],
+      "stage": [
+        "clinvar_vep_split",
+        "ref_genome",
+        "vep_cache_dir",
+        "vep_plugins_dir",
+        "utr_annotator_file",
+        "conservation_file",
+        "alphamissense_prescore",
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore",
+        "splicevault_prescore",
+        "mavedb_file",
+        "primateai_prescore",
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file",
+        "gerp_bigwig",
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
       ],
       "outputs": [
         "clinvar_vep_chr19"
       ],
       "settings": [
         "assembly",
-        "vep_installed_version"
+        "vep_installed_version",
+        "pext_enabled",
+        "pext_tissues"
       ]
     },
     {
       "id": "D1_chr20",
       "name": "CLINVAR_VEP_CHR20",
-      "calls": [
-        [
-          "ClinVar_vep_chrom",
-          "{config}",
-          "chr20"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_vep_chrom.nf",
+      "process": "CLINVAR_VEP_CHROM",
       "needs": [
         "A1",
         "A2",
@@ -1427,25 +1743,42 @@
         "B8",
         "B9",
         "D1_split"
+      ],
+      "stage": [
+        "clinvar_vep_split",
+        "ref_genome",
+        "vep_cache_dir",
+        "vep_plugins_dir",
+        "utr_annotator_file",
+        "conservation_file",
+        "alphamissense_prescore",
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore",
+        "splicevault_prescore",
+        "mavedb_file",
+        "primateai_prescore",
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file",
+        "gerp_bigwig",
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
       ],
       "outputs": [
         "clinvar_vep_chr20"
       ],
       "settings": [
         "assembly",
-        "vep_installed_version"
+        "vep_installed_version",
+        "pext_enabled",
+        "pext_tissues"
       ]
     },
     {
       "id": "D1_chr21",
       "name": "CLINVAR_VEP_CHR21",
-      "calls": [
-        [
-          "ClinVar_vep_chrom",
-          "{config}",
-          "chr21"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_vep_chrom.nf",
+      "process": "CLINVAR_VEP_CHROM",
       "needs": [
         "A1",
         "A2",
@@ -1459,25 +1792,42 @@
         "B8",
         "B9",
         "D1_split"
+      ],
+      "stage": [
+        "clinvar_vep_split",
+        "ref_genome",
+        "vep_cache_dir",
+        "vep_plugins_dir",
+        "utr_annotator_file",
+        "conservation_file",
+        "alphamissense_prescore",
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore",
+        "splicevault_prescore",
+        "mavedb_file",
+        "primateai_prescore",
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file",
+        "gerp_bigwig",
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
       ],
       "outputs": [
         "clinvar_vep_chr21"
       ],
       "settings": [
         "assembly",
-        "vep_installed_version"
+        "vep_installed_version",
+        "pext_enabled",
+        "pext_tissues"
       ]
     },
     {
       "id": "D1_chr22",
       "name": "CLINVAR_VEP_CHR22",
-      "calls": [
-        [
-          "ClinVar_vep_chrom",
-          "{config}",
-          "chr22"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_vep_chrom.nf",
+      "process": "CLINVAR_VEP_CHROM",
       "needs": [
         "A1",
         "A2",
@@ -1491,25 +1841,42 @@
         "B8",
         "B9",
         "D1_split"
+      ],
+      "stage": [
+        "clinvar_vep_split",
+        "ref_genome",
+        "vep_cache_dir",
+        "vep_plugins_dir",
+        "utr_annotator_file",
+        "conservation_file",
+        "alphamissense_prescore",
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore",
+        "splicevault_prescore",
+        "mavedb_file",
+        "primateai_prescore",
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file",
+        "gerp_bigwig",
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
       ],
       "outputs": [
         "clinvar_vep_chr22"
       ],
       "settings": [
         "assembly",
-        "vep_installed_version"
+        "vep_installed_version",
+        "pext_enabled",
+        "pext_tissues"
       ]
     },
     {
       "id": "D1_chrX",
       "name": "CLINVAR_VEP_CHRX",
-      "calls": [
-        [
-          "ClinVar_vep_chrom",
-          "{config}",
-          "chrX"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_vep_chrom.nf",
+      "process": "CLINVAR_VEP_CHROM",
       "needs": [
         "A1",
         "A2",
@@ -1523,25 +1890,42 @@
         "B8",
         "B9",
         "D1_split"
+      ],
+      "stage": [
+        "clinvar_vep_split",
+        "ref_genome",
+        "vep_cache_dir",
+        "vep_plugins_dir",
+        "utr_annotator_file",
+        "conservation_file",
+        "alphamissense_prescore",
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore",
+        "splicevault_prescore",
+        "mavedb_file",
+        "primateai_prescore",
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file",
+        "gerp_bigwig",
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
       ],
       "outputs": [
         "clinvar_vep_chrX"
       ],
       "settings": [
         "assembly",
-        "vep_installed_version"
+        "vep_installed_version",
+        "pext_enabled",
+        "pext_tissues"
       ]
     },
     {
       "id": "D1_chrY",
       "name": "CLINVAR_VEP_CHRY",
-      "calls": [
-        [
-          "ClinVar_vep_chrom",
-          "{config}",
-          "chrY"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_vep_chrom.nf",
+      "process": "CLINVAR_VEP_CHROM",
       "needs": [
         "A1",
         "A2",
@@ -1555,25 +1939,42 @@
         "B8",
         "B9",
         "D1_split"
+      ],
+      "stage": [
+        "clinvar_vep_split",
+        "ref_genome",
+        "vep_cache_dir",
+        "vep_plugins_dir",
+        "utr_annotator_file",
+        "conservation_file",
+        "alphamissense_prescore",
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore",
+        "splicevault_prescore",
+        "mavedb_file",
+        "primateai_prescore",
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file",
+        "gerp_bigwig",
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
       ],
       "outputs": [
         "clinvar_vep_chrY"
       ],
       "settings": [
         "assembly",
-        "vep_installed_version"
+        "vep_installed_version",
+        "pext_enabled",
+        "pext_tissues"
       ]
     },
     {
       "id": "D1_chrOther",
       "name": "CLINVAR_VEP_CHROTHER",
-      "calls": [
-        [
-          "ClinVar_vep_chrom",
-          "{config}",
-          "chrOther"
-        ]
-      ],
+      "module": "modules/local/install_steps/clinvar_vep_chrom.nf",
+      "process": "CLINVAR_VEP_CHROM",
       "needs": [
         "A1",
         "A2",
@@ -1588,31 +1989,40 @@
         "B9",
         "D1_split"
       ],
+      "stage": [
+        "clinvar_vep_split",
+        "ref_genome",
+        "vep_cache_dir",
+        "vep_plugins_dir",
+        "utr_annotator_file",
+        "conservation_file",
+        "alphamissense_prescore",
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore",
+        "splicevault_prescore",
+        "mavedb_file",
+        "primateai_prescore",
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file",
+        "gerp_bigwig",
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
+      ],
       "outputs": [
         "clinvar_vep_chrOther"
       ],
       "settings": [
         "assembly",
-        "vep_installed_version"
+        "vep_installed_version",
+        "pext_enabled",
+        "pext_tissues"
       ]
     },
     {
       "id": "D1",
       "name": "CLINVAR",
-      "calls": [
-        [
-          "ClinVar_install",
-          "--config",
-          "{config}"
-        ]
-      ],
-      "runs": [
-        "ClinVar_VCF_deploy",
-        "_ClinVar_VCF_deploy",
-        "ClinVar_AA_stat",
-        "ClinVar_Gene_stat",
-        "ClinVar_Gene_stat_regenerate"
-      ],
+      "module": "modules/local/install_steps/clinvar.nf",
       "needs": [
         "A1",
         "A2",
@@ -1654,6 +2064,38 @@
         "D1_chrY",
         "D1_chrOther"
       ],
+      "stage": [
+        "clinvar_release_inputs",
+        "clinvar_vep_split",
+        "clinvar_vep_chr1",
+        "clinvar_vep_chr2",
+        "clinvar_vep_chr3",
+        "clinvar_vep_chr4",
+        "clinvar_vep_chr5",
+        "clinvar_vep_chr6",
+        "clinvar_vep_chr7",
+        "clinvar_vep_chr8",
+        "clinvar_vep_chr9",
+        "clinvar_vep_chr10",
+        "clinvar_vep_chr11",
+        "clinvar_vep_chr12",
+        "clinvar_vep_chr13",
+        "clinvar_vep_chr14",
+        "clinvar_vep_chr15",
+        "clinvar_vep_chr16",
+        "clinvar_vep_chr17",
+        "clinvar_vep_chr18",
+        "clinvar_vep_chr19",
+        "clinvar_vep_chr20",
+        "clinvar_vep_chr21",
+        "clinvar_vep_chr22",
+        "clinvar_vep_chrX",
+        "clinvar_vep_chrY",
+        "clinvar_vep_chrOther",
+        "gnomad_vcf_chrX",
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore"
+      ],
       "outputs": [
         "clinvar_vcf",
         "clinvar_aa_stat",
@@ -1666,7 +2108,8 @@
       "settings": [
         "assembly",
         "vep_installed_version",
-        "clinvar_*"
+        "clinvar_*",
+        "priva_python_hash_seed"
       ]
     },
     {

@@ -299,7 +299,8 @@ fn parse_task(args: &[String]) -> std::result::Result<(String, Options), String>
             let options = Options::parse(
                 rest,
                 &[
-                    "step", "root", "config", "vcf", "cadd", "table", "family", "output",
+                    "step", "root", "config", "vcf", "cadd", "table", "family", "output", "stats",
+                    "forks",
                 ],
                 &[],
             )?;

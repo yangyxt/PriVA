@@ -10,7 +10,10 @@ the server's 404: curl -f exits 22, wget exits 8. curl --include (-i) writes
 the reply's status line and headers before the body (Content-Length,
 Last-Modified from the file's time, an ETag from its bytes; a Range header is
 ignored, as some servers do), and a 404 is then a reply too: curl exits 0
-unless -f is given. Every request is appended to FAKE_NET_ROOT/requests.log.
+unless -f is given. --dump-header FILE writes those headers to FILE and
+--write-out prints %{http_code} and %{url_effective}; with either, a 404 is a
+reply too (an empty body). Every request is appended to
+FAKE_NET_ROOT/requests.log.
 """
 import email.utils
 import hashlib
@@ -47,21 +50,24 @@ def head(source: Path) -> bytes:
             f"ETag: \"{tag}\"\r\n\r\n").encode()
 
 
-def answer(url: str, output: str | None, include: bool = False, fail: bool = True) -> bool:
+def answer(url: str, output: str | None, include: bool = False, fail: bool = True,
+           headers: str | None = None, replied: bool = False) -> bool:
     root = Path(os.environ["FAKE_NET_ROOT"])
     with open(root / "requests.log", "a") as log:
         log.write(url + "\n")
     source = served(url)
     found = source.is_file()
+    if headers:
+        Path(headers).write_bytes(head(source))
     if not found:
         print(f"fake_net: 404 {url}", file=sys.stderr)
-        if fail or not include:
+        if fail or not (include or replied):
             return False
     reply = (head(source) if include else b"") + (source.read_bytes() if found else b"")
     if output in (None, "-"):
         sys.stdout.buffer.write(reply)
         sys.stdout.buffer.flush()
-    elif include:
+    elif include or not found:
         Path(output).write_bytes(reply)
     else:
         shutil.copyfile(source, output)
@@ -70,11 +76,16 @@ def answer(url: str, output: str | None, include: bool = False, fail: bool = Tru
 
 def curl(args: list[str]) -> int:
     output, urls, at, flags = None, [], 0, set()
+    headers = written = None
     while at < len(args):
         arg = args[at]
         if arg in CURL_VALUES:
             if arg in ("-o", "--output"):
                 output = args[at + 1]
+            elif arg in ("-D", "--dump-header"):
+                headers = args[at + 1]
+            elif arg in ("-w", "--write-out"):
+                written = args[at + 1]
             at += 2
             continue
         if arg.startswith("--"):
@@ -86,7 +97,14 @@ def curl(args: list[str]) -> int:
         at += 1
     include = bool(flags & {"--include", "-i"})
     fail = bool(flags & {"--fail", "-f"})
-    ok = all(answer(url, output, include, fail or not include) for url in urls)
+    replied = bool(headers or written)
+    ok = True
+    for url in urls:
+        ok = answer(url, output, include, fail or not (include or replied), headers, replied) and ok
+        if written is not None:
+            status = "200" if served(url).is_file() else "404"
+            sys.stdout.write(written.replace("%{http_code}", status).replace("%{url_effective}", url))
+            sys.stdout.flush()
     return 0 if ok else 22
 
 

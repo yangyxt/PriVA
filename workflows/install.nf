@@ -259,7 +259,7 @@ workflow INSTALL_RESOURCES {
     STEP_E1_CADD(installNative('E1', plan, [], []))
     STEP_F1_HPO_MONDO(installNative('F1', plan, [], []))
     STEP_F4_GENE_PATHOGENIC_MECHANISM(installNative('F4', plan, [STEP_F1_HPO_MONDO.out.receipt], ['mondo_disease_scope_registry']))
-    STEP_F5_GOFCARDS_EXACT_GOF(installNative('F5', plan, [], []))
+    STEP_F5_GOFCARDS_EXACT_GOF(installNative('F5', plan, [STEP_A1_REFERENCE_FASTA.out.receipt, STEP_A2_VEP_CACHE.out.receipt], ['ref_genome', 'vep_cache_dir']))
     STEP_F6_MECHANISM_SOURCES(installNative('F6', plan, [], []))
     STEP_F7_GOFCARDS_CLINVAR_INJECTION(installNative('F7', plan, [STEP_F5_GOFCARDS_EXACT_GOF.out.receipt, STEP_F6_MECHANISM_SOURCES.out.receipt], ['gofcards_exact_gof_cache', 'clinvar_vcv_xml']))
     STEP_F8_GENE_NONLOF_MECHANISM(installNative('F8', plan, [STEP_F6_MECHANISM_SOURCES.out.receipt, STEP_F7_GOFCARDS_CLINVAR_INJECTION.out.receipt], ['gofcards_exact_gof_cache', 'clinvar_vcv_xml']))

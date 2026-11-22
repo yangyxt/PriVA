@@ -1001,7 +1001,7 @@ flowchart TB
   subgraph mech["Mechanism, GoFCards and HPO caches"]
     direction LR
     F1["F1 HPO and MONDO"] --> F4["F4 mechanism evidence<br/>shipped TSV, or curl G2P and Orphadata<br/>+ priva gene-mechanism prepared"]
-    F5["F5 GoFCards<br/>shipped cache (rebuild: phase 6)"] --> F7["F7 ClinVar injection<br/>shipped cache as it is, or<br/>priva gofcards-clinvar-injection"]
+    F5["F5 GoFCards<br/>shipped cache (rebuild: phase 6, part 6)"] --> F7["F7 ClinVar injection<br/>shipped cache as it is, or<br/>priva gofcards-clinvar-injection"]
     F6["F6 mechanism sources<br/>nothing, or priva gene-nonlof-mechanism<br/>--fetch-sources-only (VCV XML)"] --> F7
     F6 --> F8["F8 non-LOF cache<br/>shipped, or priva gene-nonlof-mechanism"]
     F7 --> F8
@@ -1023,7 +1023,7 @@ flowchart TB
 | D8 ClinVar PM5 | `priva clinvar-contract header`, `clinvar-pm5-index` | |
 | D9 ClinGen | the shipped map and dosage table | `priva clingen-map build`; curl the dosage table, `mechanism-source validate` and `record-source`, awk |
 | F4 mechanism evidence | the shipped TSV | curl G2P and Orphadata (a selected URL checked by `mechanism-source validate`), `mechanism-source record-source`, `gene-mechanism prepared`, `mechanism-evidence validate` |
-| F5 GoFCards | the shipped cache | stops: rebuilding needs the GRCh37 and GRCh38 VEP caches, which come with A2's process in phase 6 |
+| F5 GoFCards | the shipped cache | stops: rebuilding needs the GRCh37 and GRCh38 VEP caches, which come with A2's process in phase 6 (done in phase 6, part 6) |
 | F6 mechanism sources | nothing to fetch, no file recorded | `priva gene-nonlof-mechanism --fetch-sources-only`; records the VCV XML, or the `clinvar_vcv_xml` you supply |
 | F7 ClinVar injection | F5's shipped cache, as it is | for a cache F5 built: `sha256sum` of F6's XML, `priva gofcards-clinvar-injection`, `gofcards-cache-validate` (twice: the cache, then the XML it cites) |
 | F8 non-LOF cache | the shipped cache | `priva gene-nonlof-mechanism` with F7's cache and F6's XML, then `--validate-only` against the shipped schema |
@@ -1059,7 +1059,7 @@ Changes you can notice:
   without that source, which storeDir would then have kept. Each download has
   a `.source.json`; the script's `source_manifest.json`, `source_manifest.tsv`
   and `run_summary.json`, which nothing reads, are not written.
-- A forced rebuild of F5 stops with a message until phase 6. Before, the
+- A forced rebuild of F5 stops with a message until phase 6 (part 6). Before, the
   install workflow could not rebuild F5 either: the function wrote its cache
   to the build folder, not to the key the step records.
 - F7 injects when F5 hands it a cache F5 built. Before, the install workflow
@@ -1087,7 +1087,7 @@ The native builders hash some scripts they replace and record those hashes
 `scripts/*.py` as their builder source), so those scripts stay until the
 cache formats stop naming them.
 
-### Phase 6: the heavy chains as their own processes (started 22 November 2026)
+### Phase 6: the heavy chains as their own processes (22 November 2026)
 
 Part 1 moves the gnomAD and ClinVar downloads: the 24 chromosome steps
 C1_chr1 to C1_chrY, the family step C1 and the ClinVar release step D0.
@@ -1401,14 +1401,96 @@ Changes you can notice:
   into `workflows/install.nf` (no step uses it), and counts the shell part of
   the digest with the code that goes in phase 7.
 
+Part 6 finishes phase 6 with F5's rebuild, which phase 5 left stopping. F5
+still records the shipped cache; with `PRIVA_FORCE_GOFCARDS_CACHE=1` or
+`PRIVA_FORCE_ALL_CACHES=1` it builds the normalized cache (no ClinVar
+conditions yet) that F7 then injects. The build normalizes the GoFCards
+variants on both assemblies, so it needs both FASTAs, UCSC's hg19-to-hg38
+chain and the VEP caches of both assemblies. F5 now needs A1 and A2 and stages
+their `ref_genome` and `vep_cache_dir`: the install's own assembly comes from
+them, and only the other assembly is downloaded.
+
+```mermaid
+flowchart LR
+  A1["A1 ref_genome<br/>(install's assembly)"] --> refs
+  A2["A2 vep_cache_dir<br/>(install's assembly)"] --> link["vep_cache/homo_sapiens_merged/<br/>116_GRCh38 -> A2's cache"]
+  link --> pre1["installer-prerequisites --stage gofcards<br/>--allow-pinned-reference-defaults<br/>--allow-missing-merged-caches"]
+  pre1 --> refs["reference-resources install --scope gofcards:<br/>the FASTAs and chain you set, else A1's,<br/>else UCSC's pinned files (MD5 checked)"]
+  refs --> vi["vep_install --AUTO c --CONVERT<br/>--ASSEMBLY GRCh37 (the other one)"]
+  vi --> pre2["installer-prerequisites --stage gofcards<br/>(both FASTAs, chain, both caches)"]
+  pre2 --> build["priva gofcards-exact-gof:<br/>workbook, summary endpoint,<br/>bcftools norm, vep x2, CrossMap"]
+  build --> val["gofcards-cache-validate<br/>rm the cache folder and downloads"]
+  val --> F7["F7 injects ClinVar conditions"]
+```
+
+(For an hg19 install the arrows are the other way round: A2 gives GRCh37 and
+`vep_install` fetches GRCh38.)
+
+| Step | Commands in the process |
+| --- | --- |
+| F5 (rebuild) | `priva installer-prerequisites --stage gofcards --allow-pinned-reference-defaults --allow-missing-merged-caches`; `priva reference-resources install --scope gofcards --write-config --use-cache-root`; `vep --help`, the Ensembl API and installer releases (`perl`); `vep_install --AUTO c --NO_UPDATE --CACHE_VERSION R -s homo_sapiens_merged --NO_HTSLIB --NO_BIOPERL --CONVERT --ASSEMBLY OTHER`; `installer-prerequisites --stage gofcards`; `priva gofcards-exact-gof` with the function's options; `priva gofcards-cache-validate` (the commands of `gofcards_exact_gof_cache_install`, `gofcards_reference_install`, `gofcards_vep_caches_install` and `vep_cache_api_install`) |
+
+```
+                      shell function                           F5 process (forced)
+FASTA, own assembly   ref_genome of the configuration          A1's ref_genome (staged)
+FASTA, other one      gofcards_*_fasta, else UCSC download     the same (download into the task folder)
+chain                 gofcards_hg19_to_hg38_chain, else UCSC   the same
+VEP cache, own        vep_cache_dir/homo_sapiens_merged/R_*    A2's cache, linked
+VEP cache, other      vep_cache_api_install into vep_cache_dir vep_install into the task folder
+build folder          gofcards_workdir                         data/gofcards/build_work (kept)
+recorded              nothing (F7 read gofcards_workdir)       gofcards_exact_gof_cache = the normalized cache
+```
+
+Compared with the shell function run on the same files
+(`tests/install_fixtures.py gofcards` writes chromosome 1 of both assemblies
+at its real length as sparse FASTAs holding bases only around five GoFCards
+variants, A1 receipts naming them, a forward chain whose one block covers
+four of them, the workbook and a summary endpoint reply for
+`tests/fake_net.py`, which now answers curl's `--write-out` and
+`--dump-header`, and the transcripts the `vep` fixture's stand-in gives each
+variant in `--tab` mode; the old install route could never rebuild F5, see
+phase 5):
+
+| Step | Cases compared | Result |
+| --- | --- | --- |
+| F5 | shipped | same bytes |
+| F5 | rebuilt on hg38 (GRCh37 cache downloaded) and on hg19 (GRCh38 downloaded) | the same build folder: workbook, summary cache, reference rejects, VCFs, both VEP tables, CrossMap's unplaced records (one outside the chain, one deletion CrossMap refuses; the endpoint places the first), statistics and the normalized cache, apart from the two folders (the build folder, and the VEP cache folder the cache names as `vep_cache_dir`) and the times tools stamp; the same requests to the server |
+| F5 | a reverse chain; `vep_install` failing; no workbook at the server | each stops both routes with the same reason |
+| F7 | injection into each route's rebuilt cache | the same cache, audit and statistics apart from `vep_cache_dir` and the SHA-256 of the cache it read (`clinvar.source_cache_sha256`) |
+| install workflow | `-stub`, twice on one resource folder | 84 step tasks, then none |
+
+Not compared here: UCSC's pinned FASTAs and chain, whose MD5s the download
+checks, so a fixture cannot stand in for them; the process runs the same
+`priva reference-resources install` the function ran.
+
+Changes you can notice:
+
+- A forced F5 builds into its own folder and records the normalized cache.
+  Before, forcing it with the default configuration stopped ("Force cannot
+  overwrite bundled gofcards_exact_gof_cache"): the function rebuilt only when
+  you named another `gofcards_exact_gof_cache`. `PRIVA_FORCE_GOFCARDS_CLINVAR_INJECTION`
+  alone no longer stops F5; F7 stops on it with the shipped cache, as before.
+- F5 needs A1 and A2, so it waits for them and runs again when either
+  changes (the shipped route only records the shipped file). It reads the
+  shipped review table and HGNC table, which count in its digest, and no
+  longer lists `gofcards_refresh_days` (a step folder holds no older cache
+  to refresh).
+- The other assembly's VEP cache and any downloaded reference live in the
+  task folder and are removed after the build; the shell function kept them
+  in `vep_cache_dir` and `cache_root`. Only the cache is fetched
+  (`--AUTO c`): A2 installs the plugins, so the step neither checks nor
+  reinstalls them, nor sets the conda environment's variables, as
+  `vep_cache_api_install` did.
+- F5 and F7 to F9 and publish get new lineages.
+
 ### Phases 3 to 7
 
 | Phase | Scope | Shell glue now | Python it still runs | Work (tools keep their commands) |
 | --- | --- | --- | --- | --- |
 | 3 | Downloads: A1, A4, A5, B1, B2, B3, B5, B6, B7, B8, B9, D0, F1 | 4 to 10 functions each | `alternative_start_codon.py` (A4) | Each a Nextflow process: curl or git, then `priva install-task record` for the receipt. Done for A1, A4, B1, B2, B3, B5, B6, B7, B8, B9 and F1 (above); A4 no longer runs `alternative_start_codon.py`, whose pickle the Rust detector never reads |
 | 4 | Pipeline scripts: `annotation_vcf.sh` (1,827 lines), `filtration_vcf_per_fam.sh` (356), `prioritization_vcf_per_fam.sh` (430), `common_bash_utils.sh` (1,627) | run inside every analysis task | an inline `python - <<PY` block in `anno_VEP_cache_worker`, and `cadd_conda.py` (finds CADD's conda) | The annotation, filtration and prioritization tasks already exist per step; each runs VEP, bcftools, `CADD.sh` and `priva` with their own command lines instead of a shell function. `priva task run` keeps the task's checks and runs them, since which commands run depends on the settings. Done (above) for filtration, the prioritization steps and the six annotation steps; the scripts stay for the installer and `--phase annotation` until phase 6 |
-| 5 | Steps on native builders: A5 (moved from phase 3), C6, C8, C10, C11, D6, D8, D9, F4 to F10 | 7 to 19 functions each | `protein_domain_mapping.py` (C8's rebuild) | Each a process; F4's acquisition is curl and `priva gene-mechanism prepared`. Done (above), except F5's rebuild, which needs A2's two VEP caches and moves to phase 6 |
-| 6 | Heavy chains: A2, B4, C1, C3, C4, D0 (moved from phase 3), D1, E1, and F5's rebuild. Done (above): C1_chr*, C1, D0, A2, B4, C3, C4, D1_split, D1_chr*, D1 and E1 | 13 to 49 functions each | `cadd_scripts_install.py`, `cadd_prescore_index.py` (kept: they belong to CADD) | VEP, bcftools, CrossMap and `CADD.sh` command lines in the process; one change per step |
+| 5 | Steps on native builders: A5 (moved from phase 3), C6, C8, C10, C11, D6, D8, D9, F4 to F10 | 7 to 19 functions each | `protein_domain_mapping.py` (C8's rebuild) | Each a process; F4's acquisition is curl and `priva gene-mechanism prepared`. Done (above), except F5's rebuild, which needs A2's two VEP caches and moves to phase 6 (done there, part 6) |
+| 6 | Heavy chains: A2, B4, C1, C3, C4, D0 (moved from phase 3), D1, E1, and F5's rebuild. Done (above): C1_chr*, C1, D0, A2, B4, C3, C4, D1_split, D1_chr*, D1, E1 and F5's rebuild | 13 to 49 functions each | `cadd_scripts_install.py`, `cadd_prescore_index.py` (kept: they belong to CADD) | VEP, bcftools, CrossMap and `CADD.sh` command lines in the process; one change per step |
 | 7 | Remove the shell installer | `main_install`, `install_cluster.sh`, the `*.sbatch` scripts | | Delete `install_utils.sh` and the bash part of the digest |
 
 All seven phases are finished and checked end to end on the migration branch before any of it goes to `main`.

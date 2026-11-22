@@ -2290,7 +2290,14 @@
       "id": "F5",
       "name": "GOFCARDS_EXACT_GOF",
       "module": "modules/local/install_steps/gofcards_exact_gof.nf",
-      "needs": [],
+      "needs": [
+        "A1",
+        "A2"
+      ],
+      "stage": [
+        "ref_genome",
+        "vep_cache_dir"
+      ],
       "outputs": [
         "gofcards_exact_gof_cache"
       ],
@@ -2301,7 +2308,6 @@
       ],
       "settings": [
         "assembly",
-        "gofcards_refresh_days",
         "vep_installed_version"
       ],
       "release": [

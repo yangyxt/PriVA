@@ -83,6 +83,17 @@ and the like), so the steps that read them can be compared both ways:
       configuration keys; DIR/envs/conda/bin: a conda new enough for CADD;
       DIR/envs/micromamba/bin: a micromamba that makes CADD's conda frontend
       (the CADD step, E1).
+  python3 tests/install_fixtures.py gofcards --out DIR
+      DIR/A1/{hg19,hg38}/data/reference/*.fa: chromosome 1 of each assembly
+      at its real length (sparse files with their .fai), holding bases only
+      around five GoFCards variants, with DIR/receipts/A1.{hg19,hg38}.json
+      naming them; DIR/references/hg19ToHg38.over.chain: a forward chain
+      whose one block covers four of them (CrossMap refuses the deletion,
+      and GoFCards' summary endpoint places the fifth); DIR/net/HOST/PATH:
+      the GoFCards workbook and one summary endpoint reply for every allele;
+      DIR/gofcards-vep.json: the transcripts the stand-in vep of the vep
+      fixture (written into the same DIR) gives each variant with --tab, as
+      the GoFCards build (F5) runs it.
   python3 tests/install_fixtures.py ranking --out DIR
       DIR/net/HOST/PATH: the public inputs of the HPO gene ranking (F10), the
       small made-up files of rust/tests/hpo_gene_ranking, compressed as the
@@ -816,6 +827,21 @@ def value(name):
     return args[args.index(name) + 1] if name in args else None
 if os.environ.get("FAKE_VEP_FAIL"):
     sys.exit("stand-in vep failure")
+if "--tab" in args:
+    # The GoFCards build (priva gofcards-exact-gof): the --fields table of the
+    # transcripts gofcards-vep.json (beside vep.log) gives each record's ID.
+    named = json.loads((here.parents[2] / "gofcards-vep.json").read_text()).get(value("--assembly"), {})
+    lines = ["## ENSEMBL VARIANT EFFECT PREDICTOR v116.0", "## Output produced at 2026-11-16 00:00:00",
+             "#" + "\t".join(value("--fields").split(","))]
+    for line in open(value("--input_file")):
+        if not line.startswith("#"):
+            row = line.rstrip("\n").split("\t")
+            for found in named.get(row[2], []):
+                values = dict(Uploaded_variation=row[2], Location=f"{row[0]}:{row[1]}", Allele=row[4],
+                              Feature_type="Transcript", **found)
+                lines.append("\t".join(values.get(name, "-") for name in value("--fields").split(",")))
+    Path(value("--output_file")).write_text("\n".join(lines) + "\n")
+    sys.exit(0)
 assembly = value("--assembly")
 patch = {"GRCh38": "GRCh38.p14", "GRCh37": "GRCh37.p13"}[assembly]
 cache = f"{value('--dir_cache')}/homo_sapiens_merged/116_{assembly}"
@@ -1192,9 +1218,109 @@ def write_cadd(out: Path, upstream=None):
     print(out)
 
 
+GOFCARDS_SHIFT = 65000  # hg19 chr1 position minus its hg38 position, in the chain's block
+GOFCARDS_LENGTHS = {"hg19": 249250621, "hg38": 248956422}
+# Gene, hg19 position, Ref, Alt, transcripts (Ensembl ID, MANE) and whether it lifts.
+GOFCARDS_VARIANTS = [
+    ("SCN1A", 1000000, None, None, [("ENST00000303395", "NM_001165963.4")], True),
+    ("KCNQ1", 2000000, None, None, [("ENST00000155840", "NM_000218.3"), ("ENST00000335475", "")], True),
+    ("FGFR3", 3000000, None, None, [("ENST00000440486", "NM_000142.5")], True),
+    ("PIK3CA", 4000000, "3", "-", [("ENST00000263967", "NM_006218.4")], True),
+    ("KRAS", 7000000, None, None, [("ENST00000256078", "NM_004985.5")], False),
+]
+
+
+def sparse_fasta(path: Path, name: str, length: int, bases: dict):
+    """A FASTA of one contig of LENGTH, 60 bases a line, holding only BASES
+    (1-based position: base) and NUL bytes elsewhere (a sparse file), with the
+    line breaks around them and at the end, and its .fai."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    header = f">{name}\n".encode()
+    start, lines = len(header), (length + 59) // 60
+    near = {(position - 1) // 60 + step for position in bases for step in (-1, 0, 1)}
+    with open(path, "wb") as handle:
+        handle.write(header)
+        for line in sorted(near | {lines - 1}):
+            if 0 <= line < lines:
+                handle.seek(start + line * 61 + min(60, length - line * 60))
+                handle.write(b"\n")
+        for position, base in bases.items():
+            handle.seek(start + (position - 1) // 60 * 61 + (position - 1) % 60)
+            handle.write(base.encode())
+    Path(f"{path}.fai").write_text(f"{name}\t{length}\t{start}\t60\t61\n")
+
+
+def write_gofcards(out: Path):
+    import openpyxl
+    import random
+    generator = random.Random("gofcards fixture")
+    hg19, hg38, rows, vep = {}, {}, [], {"GRCh37": {}, "GRCh38": {}}
+    for number, (gene, position, ref, alt, transcripts, lifts) in enumerate(GOFCARDS_VARIANTS):
+        flank = {position + at: generator.choice("ACGT") for at in range(-100, 101)}
+        hg19.update(flank)
+        if lifts or number == len(GOFCARDS_VARIANTS) - 1:
+            # The unplaced one is still on GRCh38, where the endpoint puts it.
+            hg38.update({spot - GOFCARDS_SHIFT: base for spot, base in flank.items()})
+        if ref and ref.isdigit():
+            ref = "".join(flank[position + at] for at in range(int(ref)))
+        ref = ref or flank[position]
+        alt = alt or {"A": "C", "C": "G", "G": "T", "T": "A"}[ref[0]]
+        end = position + len(ref) - 1 if ref != "-" else position
+        values = {"GeneSymbol": gene, "Transcript": transcripts[0][1] or "NM_000001.1", "Chr": "1",
+                  "hg19Start": position, "hg19End": end, "Ref": ref, "Alt": alt, "Function": "gain of function",
+                  "Pathways Proteins Involved": "pathway A", "Disorder Involved": f"disease of {gene}",
+                  "PMID": 30000000 + number, "Animal Model": "mouse", "Cell Model": "_", "Pscore": 0.5,
+                  "Order Numbe": number + 1}
+        rows.append(values)
+        if gene == "FGFR3":
+            # The same allele again, from another publication.
+            rows.append({**values, "PMID": 31000000, "Disorder Involved": "another disease", "Order Numbe": 99})
+        identifier = f"gof{number:06d}"
+        for assembly, version in (("GRCh37", 1), ("GRCh38", 2)):
+            if assembly == "GRCh38" and not lifts:
+                continue
+            vep[assembly][identifier] = [
+                {"Gene": f"ENSG{number:011d}", "Feature": f"{transcript}.{version}",
+                 "Consequence": "inframe_deletion" if alt == "-" else "missense_variant",
+                 "HGVSc": f"{transcript}.{version}:c.{100 + number}{ref[0]}>{alt[0]}",
+                 "HGVSp": f"ENSP{transcript[4:]}.{version}:p.Lys{34 + number}Glu",
+                 "MANE_SELECT": mane or "-", "CANONICAL": "YES" if mane else "-", "SYMBOL": gene}
+                for transcript, mane in transcripts]
+    receipts = out / "receipts"
+    receipts.mkdir(parents=True, exist_ok=True)
+    for assembly, bases in (("hg19", hg19), ("hg38", hg38)):
+        folder = out / "A1" / assembly
+        fasta = folder / "data" / "reference" / f"{assembly}.fa"
+        sparse_fasta(fasta, "chr1", GOFCARDS_LENGTHS[assembly], bases)
+        (receipts / f"A1.{assembly}.json").write_text(json.dumps(
+            receipt("A1", "REFERENCE_FASTA", folder, {"ref_genome": fasta}), indent=2) + "\n")
+    chain = out / "references" / "hg19ToHg38.over.chain"
+    chain.parent.mkdir(parents=True, exist_ok=True)
+    size = 5500000
+    chain.write_text(f"chain {size} chr1 {GOFCARDS_LENGTHS['hg19']} + 500000 {500000 + size} chr1 "
+                     f"{GOFCARDS_LENGTHS['hg38']} + {500000 - GOFCARDS_SHIFT} {500000 - GOFCARDS_SHIFT + size} 1\n"
+                     f"{size}\n\n")
+    net = out / "net"
+    workbook = net / "download.genemed.tech/upload/GainFunCards/gofcards_data_download.xlsx"
+    workbook.parent.mkdir(parents=True, exist_ok=True)
+    book = openpyxl.Workbook()
+    sheet = book.active
+    columns = list(rows[0])
+    sheet.append(columns)
+    for values in rows:
+        sheet.append([values[name] for name in columns])
+    book.save(workbook)
+    summary = net / "java.genemed.tech/admin-api/backend/data/hg19/variantLevel/summary"
+    summary.parent.mkdir(parents=True, exist_ok=True)
+    unplaced = GOFCARDS_VARIANTS[-1][1] - GOFCARDS_SHIFT
+    summary.write_text(json.dumps({"code": 0, "data": {"Accession": "GoF0001", "hg38_start": unplaced}}) + "\n")
+    (out / "gofcards-vep.json").write_text(json.dumps(vep, indent=2) + "\n")
+    print(out)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("what", choices=["clinvar", "alphamissense", "mechanism", "nonlof", "ranking", "gnomad", "clinvar_release", "vep", "spliceai", "alphamissense_inputs", "vep_inputs", "cadd"])
+    parser.add_argument("what", choices=["clinvar", "alphamissense", "mechanism", "nonlof", "ranking", "gnomad", "clinvar_release", "vep", "spliceai", "alphamissense_inputs", "vep_inputs", "cadd", "gofcards"])
     parser.add_argument("--out", required=True)
     parser.add_argument("--plugin", help="spliceai: Ensembl's SpliceAI.pm of VEP 116 (VEP_plugins release/116)")
     parser.add_argument("--upstream", help="cadd: a folder holding CADD-scripts v1.7.2's extract_scored.py and MMSplice.py")
@@ -1208,7 +1334,8 @@ def main():
      "mechanism": write_mechanism, "nonlof": write_nonlof,
      "ranking": write_ranking, "gnomad": write_gnomad,
      "clinvar_release": write_clinvar_release, "vep": write_vep,
-     "alphamissense_inputs": write_alphamissense_inputs, "vep_inputs": write_vep_inputs}[args.what](out)
+     "alphamissense_inputs": write_alphamissense_inputs, "vep_inputs": write_vep_inputs,
+     "gofcards": write_gofcards}[args.what](out)
 
 
 if __name__ == "__main__":

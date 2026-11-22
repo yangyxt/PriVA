@@ -3,15 +3,15 @@
 // tests/install_workflow_check.py (the check fails when the two differ);
 // edit the registry, then regenerate this file.
 //
-// A step's lineage is a hash of its code digest (installer functions, scripts,
-// data files and the Rust files of the priva commands it runs), its settings,
-// the files you supply, the release of a changing source (or its pin), and the
-// content of every step it needs. Its results live in
+// A step's lineage is a hash of its code digest (its module, the scripts and
+// data files it names, and the Rust files of the priva commands it runs), its
+// settings, the files you supply, the release of a changing source (or its
+// pin), and the content of every step it needs. Its results live in
 // resource_root/STEP/LINEAGE/, so a change reruns the step it touches, and
 // the steps after it only when that step's results changed.
 
 include { INSTALL_RELEASE; INSTALL_PLAN; INSTALL_PREFLIGHT; INSTALL_PUBLISH } from '../modules/local/install'
-@INCLUDES@@PROCESS_INCLUDES@
+@PROCESS_INCLUDES@
 
 def installSha(String text) {
     java.security.MessageDigest.getInstance('SHA-256').digest(text.getBytes('UTF-8')).encodeHex().toString()
@@ -44,8 +44,8 @@ def installWire(String id, plan, List needs) {
 // modules/local/install_steps/): one item [id, lineage, plan, [receipts],
 // its plan entry, {key: file name in staged/}, [files to stage]]. It reads the
 // keys its registry entry lists in "stage" from the receipts of the steps it
-// needs (a file shipped in the checkout from this checkout, as install-task
-// run reads it), with their index files and provenance (.provenance.json),
+// needs (a file shipped in the checkout from this checkout, as publish reads
+// it), with their index files and provenance (.provenance.json),
 // and the files you supply for it (a file that does not exist is left out,
 // and the step says it is missing).
 def installNative(String id, plan, List needs, List stage) {

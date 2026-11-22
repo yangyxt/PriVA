@@ -6,7 +6,7 @@
   <text x="32" y="44" fill="#1c3346" font-size="30" font-weight="700" font-family="DejaVu Sans, sans-serif">Where PriVA installs its resources</text>
   <text x="33" y="75" fill="#51677a" font-size="18" font-weight="400" font-family="DejaVu Sans, sans-serif">Four storage roots · default names shown · resources prepared as needed</text>
   <rect x="24" y="96" width="1132" height="155" rx="12" fill="#eaf3fb" stroke="#cfdfec" />
-  <text x="46" y="126" fill="#1c3346" font-size="19" font-weight="700" font-family="DejaVu Sans, sans-serif">Before main_install: choose existing paths and the annotation profile</text>
+  <text x="46" y="126" fill="#1c3346" font-size="19" font-weight="700" font-family="DejaVu Sans, sans-serif">Before the installation: choose existing paths and the annotation profile</text>
   <text x="46" y="158" fill="#075ca8" font-size="18" font-weight="700" font-family="DejaVu Sans Mono, monospace">cache_root + tmp_dir</text>
   <text x="320" y="158" fill="#1c3346" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1130">Existing writable absolute directories; installation stops if either is invalid.</text>
   <text x="46" y="188" fill="#075ca8" font-size="18" font-weight="700" font-family="DejaVu Sans Mono, monospace">assembly</text>
@@ -199,8 +199,8 @@
   <text x="48" y="1541" fill="#51677a" font-size="15.5" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1140">Source and bundled data belong to the Git checkout; genome-wide downloaded caches do not.</text>
   <line x1="48" y1="1557" x2="1130" y2="1557" stroke="#d5e0e8" />
   <path d="M56 1567 V1579 H65" fill="none" stroke="#a9bac7" stroke-width="1.5" />
-  <text x="68" y="1584" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">scripts/install_utils.sh</tspan></text>
-  <text x="676" y="1584" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">main_install entry point.</text>
+  <text x="68" y="1584" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">main.nf, conf/install_steps.json</tspan></text>
+  <text x="676" y="1584" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Installation entry point and its steps.</text>
   <path d="M56 1597 V1609 H65" fill="none" stroke="#a9bac7" stroke-width="1.5" />
   <text x="68" y="1614" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">config.yaml, cache_resources.json</tspan></text>
   <text x="676" y="1614" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Config template + resource lifecycle map.</text>

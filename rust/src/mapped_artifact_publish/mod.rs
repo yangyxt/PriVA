@@ -7,7 +7,7 @@ use crate::alpha_annotation_base::io::*;
 use crate::biomart;
 use crate::cli::{Result, invalid};
 use crate::json_text::Json;
-use crate::python_path::{absolute, is_file};
+use crate::python_path::is_file;
 pub(crate) use cli::dispatch;
 use metadata::{Value, require_equal};
 use std::path::{Path, PathBuf};
@@ -71,8 +71,6 @@ struct Context {
     /// This executable when `pm1-regions build` replaces the Python producer.
     native_producer: Option<PathBuf>,
     kind: String,
-    annotation_base: Option<PathBuf>,
-    native_lineage: Option<PathBuf>,
     helper: PathBuf,
     python: String,
     biomart: biomart::Context,
@@ -121,9 +119,7 @@ impl Context {
     fn expected(&self) -> Result<Json> {
         if self.native_producer.is_some() {
             require(
-                self.kind == "pm1"
-                    && self.annotation_base.is_none()
-                    && self.native_lineage.is_none(),
+                self.kind == "pm1",
                 "The native producer builds only PM1 regions",
             )?;
             require(
@@ -131,15 +127,13 @@ impl Context {
                 "Native PM1 regions are published as an .rkyv artifact",
             )?;
         } else {
-            let wanted = if self.kind == "motifs" {
-                "am_pick_missense_constrained_segments.py"
-            } else {
-                "prepare_pm1_regions.py"
-            };
             require(
                 self.producer.is_absolute()
-                    && self.producer.file_name().is_some_and(|n| n == wanted),
-                "Use the selected motif/PM1 scientific producer",
+                    && self
+                        .producer
+                        .file_name()
+                        .is_some_and(|n| n == "prepare_pm1_regions.py"),
+                "Use the selected PM1 scientific producer",
             )?;
             require(
                 !symlink(&self.producer)? && is_file(&self.producer)?,
@@ -176,42 +170,6 @@ impl Context {
             string(digest(&self.helper.join("scripts/biomart_nm_to_enst.py"))?),
         );
         result.set("mapping_identity", self.identity()?);
-        if let Some(base) = &self.annotation_base {
-            require(
-                self.kind == "motifs",
-                "Only motifs consume the complete AlphaMissense base",
-            )?;
-            let source = self
-                .producer
-                .parent()
-                .and_then(Path::parent)
-                .ok_or_else(|| error("IndexError", "1"))?;
-            // The original imports these two source assets before reading the
-            // selected config or base. Preserve missing/unreadable-asset order;
-            // their implementation is native and no source code is executed.
-            for name in ["alphamissense_annotation_base.py", "alphamissense_cache.py"] {
-                let asset = self.producer.with_file_name(name);
-                std::fs::read(&asset).map_err(|e| crate::python_path::os_error(e, &asset, None))?;
-            }
-            result.set(
-                "scientific_input",
-                crate::alpha_annotation_base::motif_binding(
-                    &self.config,
-                    source,
-                    Some(base),
-                    &self.python,
-                )?,
-            );
-        }
-        if let Some(lineage) = &self.native_lineage {
-            result.set(
-                "native_input_lineage",
-                object([
-                    ("path", string(absolute(lineage)?)),
-                    ("sha256", string(digest(lineage)?)),
-                ]),
-            );
-        }
         Ok(result)
     }
     fn target(&self) -> Result<PathBuf> {
@@ -228,71 +186,6 @@ impl Context {
             self.artifact.parent().unwrap_or(&self.artifact),
             Path::new(self.artifact.file_name().unwrap_or_default()),
         )
-    }
-    fn recovery_context(&self, target: &Path) -> Result<Json> {
-        let mut expected = self.expected()?;
-        let pending = transaction::load_pending(&suffix(target, ".publish.pending.json"))?;
-        let pending = Value(pending.trim());
-        let pinned = pending.get("context")?.get("native_input_lineage")?;
-        if pinned.0 != "null" && expected.get("native_input_lineage").is_none() {
-            require(
-                self.kind == "motifs"
-                    && expected.get("scientific_input").is_some()
-                    && pinned.exact_object(&["path", "sha256"])?,
-                "Unexpected native adoption context",
-            )?;
-            let selected = path(&pinned.item("path")?.json()?)?;
-            require(
-                selected.is_absolute()
-                    && !symlink(&selected)?
-                    && is_file(&selected)?
-                    && pinned.item("sha256")?.equal(&string(digest(&selected)?))?,
-                "Pinned native lineage changed",
-            )?;
-            let encoded = read_text(&selected)?;
-            let lineage = Value::validate(&encoded)?;
-            require(
-                lineage
-                    .get("schema")?
-                    .equal(&string("priva-alphamissense-motif-input-v1"))?
-                    && lineage.get("provenance")?.truth()
-                    && lineage
-                        .get("scientific_input")?
-                        .equal(get(&expected, "scientific_input")?)?
-                    && lineage
-                        .get("mapping_identity")?
-                        .equal(get(&expected, "mapping_identity")?)?
-                    && lineage.get("artifact_sha256")?.equal(
-                        &pending
-                            .item("new")?
-                            .item("artifact")?
-                            .item("sha256")?
-                            .json()?,
-                    )?
-                    && lineage.get("artifact_bytes")?.equal(
-                        &pending
-                            .item("new")?
-                            .item("artifact")?
-                            .item("size")?
-                            .json()?,
-                    )?,
-                "Pinned native lineage no longer describes the pending motif",
-            )?;
-            let original = path(&lineage.item("artifact_path")?.json()?)?;
-            self.receipt_check(&original)?;
-            require(
-                lineage
-                    .item("artifact_sha256")?
-                    .equal(get(&transaction::file_state(&original)?, "sha256")?)?
-                    && lineage.item("receipt_sha256")?.equal(get(
-                        &transaction::file_state(&suffix(&original, ".nm_to_enst.json"))?,
-                        "sha256",
-                    )?)?,
-                "Preserved historical native pair changed",
-            )?;
-            expected.set("native_input_lineage", pinned.json()?);
-        }
-        Ok(expected)
     }
     fn recover(&self) -> Result<bool> {
         let mut target = self.artifact.clone();
@@ -325,7 +218,7 @@ impl Context {
         }
         let _lock = lock(target.parent().unwrap())?;
         if lexists(&suffix(&target, ".publish.pending.json"))? {
-            self.finish(&target, &self.recovery_context(&target)?)?;
+            self.finish(&target, &self.expected()?)?;
             println!(
                 "Recovered completed mapped artifact publication: {}",
                 self.artifact.display()
@@ -390,8 +283,6 @@ mod tests {
             producer: PathBuf::new(),
             native_producer: Some(producer),
             kind: "pm1".to_owned(),
-            annotation_base: None,
-            native_lineage: None,
             helper: helper.to_path_buf(),
             python: "python".to_owned(),
             biomart: biomart::Context::new(helper).unwrap(),
@@ -432,7 +323,7 @@ mod tests {
         context.artifact.set_extension("pkl");
         assert!(context.expected().is_err());
         context.artifact.set_extension("rkyv");
-        context.kind = "motifs".to_owned();
+        context.kind = "other".to_owned();
         assert!(context.expected().is_err());
     }
 

@@ -204,47 +204,6 @@ class BundledMappingLayout(unittest.TestCase):
                               if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == constant for target in node.targets))
             self.assertEqual(ast.literal_eval(assignment.value.right), HGNC)
 
-    def test_both_missing_source_shell_routes_use_repo_target_and_external_workspace(self):
-        for release in ('113', '116'):
-            with self.subTest(release=release):
-                config = dict(self.config, vep_installed_version=release)
-                path = self.folder / ('config-' + release + '.json')
-                path.write_text(json.dumps(config))
-                events = self.folder / ('events-' + release + '.json')
-                # Real selection/workspace CLI; only network acquisition and
-                # its immediate full verification are replaced by a fixture.
-                script = r'''
-source "$1" >/dev/null || exit
-BASE_DIR=$TEST_SOURCE
-python() {
-    if [[ $1 == */biomart_nm_to_enst.py ]]; then
-        "$TEST_PYTHON" -c 'import json,sys; from pathlib import Path; a=sys.argv[2:]; p=Path(sys.argv[1]); old=json.loads(p.read_text()) if p.exists() else []; old.append(a); p.write_text(json.dumps(old))' "$TEST_EVENTS" "$@"
-        [[ $2 != fetch ]] || return 73
-    else "$TEST_PYTHON" "$@"; fi
-}
-# The fixture priva runs each script through `python` in a new Bash.
-export -f python
-nm_to_enst_mapping_install "$TEST_CONFIG"
-'''
-                result = subprocess.run(['bash', '--noprofile', '--norc', '-c', script,
-                                         'fixture', str(ROOT / 'scripts/install_utils.sh')],
-                                        env=dict(os.environ, TEST_PYTHON=sys.executable, TEST_SOURCE=str(self.checkout),
-                                                 TEST_CONFIG=str(path), TEST_EVENTS=str(events),
-                                                 **fake_priva_binary.environment(self.folder)),
-                                        text=True, capture_output=True, timeout=30)
-                self.assertNotEqual(result.returncode, 0)
-                argv, = json.loads(events.read_text())
-                selected = B.source_for_assembly('hg38', release)
-                self.assertEqual(argv[argv.index('--output') + 1], str(self.checkout / selected['relative_path']))
-                workspace = self.cache / 'BioMart' / selected['source_id']
-                if release == '116':
-                    self.assertEqual(argv[argv.index('--resource-dir') + 1], str(workspace))
-                    self.assertNotIn('--raw-output', argv)
-                else:
-                    self.assertTrue(Path(argv[argv.index('--raw-output') + 1]).is_relative_to(workspace))
-                self.assertEqual(json.loads(path.read_text()), config)
-                self.assertFalse((self.cache / 'data/hgnc').exists())
-
 
 if __name__ == '__main__':
     unittest.main()

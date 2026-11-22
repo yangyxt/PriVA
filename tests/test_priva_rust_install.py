@@ -565,48 +565,6 @@ class ShellInstallTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(dir=os.environ.get("PRIVA_TEST_TMPDIR", os.environ.get("TMPDIR")))
         self.addCleanup(self.temp.cleanup); self.folder = Path(self.temp.name)
 
-    def run_shell(self, extra="", status=0, alias=False, binary=None):
-        cache = self.folder / "cache"; cache.mkdir(exist_ok=True)
-        selected = cache
-        if alias:
-            selected = self.folder / "alias"; selected.symlink_to(cache.name, target_is_directory=True)
-        if binary is None:
-            binary = self.folder / "managed-priva"; binary.write_text("#!/bin/sh\n"); binary.chmod(0o555)
-        config = self.folder / "selected.yaml"
-        config.write_text(f"cache_root: {selected}\npriva_binary: \"\"\n")
-        calls = self.folder / "calls.json"
-        script = r'''
-source "$INSTALLER" >/dev/null || exit
-read_yaml() { "$TEST_PYTHON" -c 'import sys,yaml;print(yaml.safe_load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"; }
-python() { "$TEST_PYTHON" -c 'import json,os,sys;open(os.environ["CALLS"],"w").write(json.dumps(sys.argv[1:]));print(json.dumps({"binary": os.environ["BINARY"], "ready": True}))' "$@"; return "$HELPER_STATUS"; }
-PriVA_rust_install --config "$CONFIG" ''' + extra
-        env = {key: value for key, value in os.environ.items() if not key.startswith("BASH_FUNC_") and key not in ("BASH_ENV", "ENV")}
-        env.update(INSTALLER=str(ROOT / "scripts/install_utils.sh"), TEST_PYTHON=sys.executable,
-                   CONFIG=str(config), CALLS=str(calls), HELPER_STATUS=str(status), BINARY=str(binary))
-        result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
-        return result, json.loads(calls.read_text()) if calls.exists() else None, cache, config
-
-    def test_actual_shell_function_forwards_only_current_source_and_normalized_cache(self):
-        result, calls, cache, config = self.run_shell(alias=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(calls, [str(ROOT / "scripts/bootstrap_priva_rust.py"), "install", "--source-root", str(ROOT), "--cache-root", str(cache)])
-        # The pipeline scripts find the program through this key.
-        self.assertEqual(config.read_text().splitlines()[1], f"priva_binary: {self.folder / 'managed-priva'}")
-
-    def test_helper_failure_propagates(self):
-        result, _, _, config = self.run_shell(status=73)
-        self.assertEqual(result.returncode, 1)
-        self.assertIn('priva_binary: ""', config.read_text())
-
-    def test_reported_path_must_be_an_executable(self):
-        missing = self.folder / "missing-priva"
-        result, _, _, config = self.run_shell(binary=missing)
-        self.assertEqual(result.returncode, 1)
-        self.assertIn('priva_binary: ""', config.read_text())
-
-    def test_extra_arguments_refused_before_helper(self):
-        result, calls, _, _ = self.run_shell(extra="--cache-root /foreign")
-        self.assertEqual(result.returncode, 2); self.assertIsNone(calls)
 
     def test_every_compiled_in_file_is_copied_by_the_cold_build(self):
         # include_str!/include_bytes! outside the test modules must name files the
@@ -618,22 +576,6 @@ PriVA_rust_install --config "$CONFIG" ''' + extra
             for name in re.findall(r'include_(?:str|bytes)!\("([^"]+)"\)', code):
                 target = os.path.normpath(os.path.join(os.path.dirname(path.relative_to(ROOT)), name))
                 self.assertIn(target, listed, f"{path.relative_to(ROOT)} compiles in {name}")
-
-    def test_main_calls_rust_once_after_driver_without_backend_mutation(self):
-        source = (ROOT / "scripts/install_utils.sh").read_text()
-        # The entry point's subshell contains its private builder-view marker
-        # and lock descriptor, including early returns.
-        main = source.split("function main_install() (", 1)[1].split("\n)\n", 1)[0]
-        self.assertEqual(main.count('PriVA_rust_install --config "${config_file}"'), 1)
-        self.assertLess(main.index('Nextflow_runtime_install "${config_file}"'), main.index('PriVA_rust_install --config'))
-        self.assertLess(main.index('PriVA_rust_install --config'), main.index('reference_genome_install "${config_file}"'))
-        function = source.split("function PriVA_rust_install() {", 1)[1].split("\n}\n", 1)[0]
-        # It saves the program's path as priva_binary and nothing else: no ranking
-        # selection, environment or PATH change.
-        self.assertEqual(function.count('update_or_append_yaml'), 1)
-        self.assertIn('update_or_append_yaml "$2" priva_binary "${binary}"', function)
-        for forbidden in ('priva_ranking_binary', 'PRIVA_RUST', 'export ', 'PATH='):
-            self.assertNotIn(forbidden, function)
 
 
 if __name__ == "__main__":

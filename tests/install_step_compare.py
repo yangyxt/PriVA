@@ -3,7 +3,10 @@
 
 Old: `priva install-task run` with the registry before the step became its
 own process (tests/fixtures/install-steps-1879c0c.json), which calls the
-step's shell function from scripts/install_utils.sh. New: the step's process
+step's shell function from scripts/install_utils.sh. Phase 7 removed both, so
+the old route runs in a checkout of commit 841e200 (--old-root, for example
+`git worktree add OLD 841e200`) with a priva built there (--old-priva,
+`cargo build --release` in OLD/rust). New: the step's process
 (conf/install_steps.json "module"), run by Nextflow on the same plan. Both get
 the same configuration, the same receipts of the steps it needs (--input) and,
 with --net, the same server: tests/fake_net.py answers curl and wget from that
@@ -16,8 +19,9 @@ its header, which holds the name and time it was written with, and then its
 decompressed bytes must be the same). Exit 1 on any difference.
 
   python3 tests/install_step_compare.py --step B6 --config C.yaml --work W \\
-      --priva rust/target/release/priva --nextflow nextflow [--net DIR] \\
-      [--input RECEIPT]... [--new-only]
+      --priva rust/target/release/priva --old-root OLD \\
+      --old-priva OLD/rust/target/release/priva --nextflow nextflow \\
+      [--net DIR] [--input RECEIPT]... [--new-only]
 
 --new-only runs only the step's process and prints the keys it records (for a
 case the old function handled by writing beside a file you supply).
@@ -39,10 +43,8 @@ with it, and is only checked to be there on both sides.
 --family: a key that names the chrX member of a chromosome family
 (NAME.chrX.vcf.gz and the like) is compared with its 23 other members.
 
---old-priva PATH: the program the old route runs (and its shell function
-calls), when the change also changes a priva command the function ran: build
-the commit before the change and name its binary here. The default is
---priva.
+--old-root DIR and --old-priva PATH: the checkout and the program the old
+route runs (and its shell function calls). Both are needed unless --new-only.
 """
 import argparse
 import fnmatch
@@ -180,7 +182,7 @@ def old_route(args, plan_json: Path, work: Path, env: dict) -> dict:
     here = work / "old" / "run"
     here.mkdir(parents=True, exist_ok=True)
     inputs = [x for r in args.input for x in ("--input", Path(r).resolve())]
-    run([args.old_priva, "install-task", "run", "--source-root", ROOT, "--registry", OLD_REGISTRY,
+    run([args.old_priva, "install-task", "run", "--source-root", args.old_root, "--registry", OLD_REGISTRY,
          "--plan", plan_json, "--step", args.step, "--lineage", "old", "--folder", work / "old" / "folder",
          "--receipt", "receipt.json"] + inputs,
         cwd=here, env=dict(env, PRIVA_BINARY=args.old_priva, INSTALL_THREADS="2"), check=True)
@@ -266,6 +268,7 @@ def main():
     parser.add_argument("--config", required=True)
     parser.add_argument("--work", required=True)
     parser.add_argument("--priva", required=True)
+    parser.add_argument("--old-root")
     parser.add_argument("--old-priva")
     parser.add_argument("--nextflow", required=True)
     parser.add_argument("--net")
@@ -277,7 +280,13 @@ def main():
     args = parser.parse_args()
     args.config = str(Path(args.config).resolve())
     args.priva = str(Path(args.priva).resolve())
-    args.old_priva = str(Path(args.old_priva or args.priva).resolve())
+    if not args.new_only:
+        if not (args.old_root and args.old_priva):
+            parser.error("the old route needs --old-root and --old-priva (a checkout of 841e200 and its priva)")
+        args.old_root = str(Path(args.old_root).resolve())
+        args.old_priva = str(Path(args.old_priva).resolve())
+        if not (Path(args.old_root) / "scripts" / "install_utils.sh").is_file():
+            parser.error(f"--old-root {args.old_root} has no scripts/install_utils.sh")
     work = Path(args.work).resolve()
     if work.exists():
         subprocess.run(["chmod", "-R", "u+w", work])

@@ -1,7 +1,6 @@
 //! Bounded alphamissense_cache.check_annotation semantics, independent of
 //! pysam record readers. Plain VCF and ordinary gzip are source-supported.
 use super::io::*;
-use super::profile::{assembly, major};
 use super::{error, object, require};
 use crate::cli::Result;
 use crate::json_text::Json;
@@ -231,4 +230,28 @@ pub(crate) fn check_resource(
         ));
     }
     value
+}
+
+/// The configured assembly as AlphaMissense names it.
+pub(super) fn assembly(value: &Json) -> Result<&'static str> {
+    match value.as_str() {
+        Some("hg19" | "GRCh37") => Ok("hg19"),
+        Some("hg38" | "GRCh38") => Ok("hg38"),
+        _ if matches!(value, Json::Array(_) | Json::Object(_)) => Err(error(
+            "TypeError",
+            format!("unhashable type: '{}'", type_name(value)),
+        )),
+        _ => Err(error(
+            "ValueError",
+            "AlphaMissense requires hg19/GRCh37 or hg38/GRCh38",
+        )),
+    }
+}
+/// A VEP major release: digits without a leading zero.
+pub(super) fn major(value: &str) -> bool {
+    value
+        .as_bytes()
+        .first()
+        .is_some_and(|b| matches!(b, b'1'..=b'9'))
+        && value.bytes().all(|b| b.is_ascii_digit())
 }

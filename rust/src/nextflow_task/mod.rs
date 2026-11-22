@@ -182,12 +182,12 @@ const LAUNCH_REQUIRED: &[&str] = &[
     "family-cpus",
 ];
 
-/// Task phases. `annotation` runs the whole annotation script; the
-/// `annotation-*` steps run one of its functions each, and `annotation-merge`
-/// joins their INFO fields. `prioritization` runs the whole prioritization
-/// script; `prioritization-combine`, `-splicing`, `-utr` and `-acmg` run one of
-/// its steps each, and `prioritization-join` joins the splicing and 5' UTR
-/// copies of the family table.
+/// Task phases. `annotation` imports an already annotated VCF (annotated
+/// mode); in raw mode the `annotation-*` steps annotate one source each, and
+/// `annotation-merge` joins their INFO fields. `prioritization` runs every
+/// prioritization step in one task; `prioritization-combine`, `-splicing`,
+/// `-utr` and `-acmg` run one step each, and `prioritization-join` joins the
+/// splicing and 5' UTR copies of the family table.
 pub(crate) const PHASES: &[&str] = &[
     "annotation",
     "annotation-preprocess",

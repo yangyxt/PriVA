@@ -348,34 +348,6 @@ class ReferenceResources(unittest.TestCase):
                 REF.preflight(REF.resource_plan(config, self.data, "selected")[0])
                 self.assertFalse(self.data.exists())
 
-    def test_main_selected_reference_preflight_explicitly_uses_the_shared_cache_root_mode(self):
-        config = self.folder / "config's path.yaml"
-        config.write_text(f"assembly: hg38\ncache_root: {self.folder}/new_cache\n")
-        events = self.folder / "helper_events.jsonl"
-        script = r'''
-            source "$1" >/dev/null
-            DATA_DIR="$TEST_DATA"
-            BASE_DIR="$TEST_SOURCE"
-            python() {
-                "$TEST_PYTHON" -c 'import json,os,sys; open(os.environ["TEST_EVENTS"],"a").write(json.dumps(sys.argv[1:])+"\n")' "$@"
-            }
-            gofcards_exact_gof_cache_install() { return 0; }
-            # The fixture priva runs each script through `python` in a new Bash.
-            export -f python
-            priva_install_prerequisites "$2"
-        '''
-        result = subprocess.run(["bash", "--noprofile", "--norc", "-c", script, "fixture",
-                                 str(ROOT / "scripts/install_utils.sh"), str(config)],
-                                env=dict(os.environ, TEST_DATA=str(self.data), TEST_SOURCE=str(self.data.parent),
-                                         TEST_PYTHON=sys.executable, TEST_EVENTS=str(events),
-                                         **fake_priva_binary.environment(self.folder)),
-                                text=True, capture_output=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        calls = [json.loads(line) for line in events.read_text().splitlines()]
-        reference = next(call for call in calls if call[0].endswith("reference_resources.py"))
-        self.assertEqual(reference[1:], ["preflight", str(config), "--data-dir", str(self.data),
-                                       "--scope", "selected", "--use-cache-root"])
-        self.assertEqual(config.read_text(), f"assembly: hg38\ncache_root: {self.folder}/new_cache\n")
 
     def test_missing_original_dragen_is_never_a_download_destination(self):
         path = self.folder / "DRAGEN/original_reference.fa"
@@ -593,99 +565,6 @@ class ReferenceResources(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "GoFCards GRCh38 merged VEP"):
                 PRE.validate_gofcards(config, allow_pinned_reference_defaults=True, source_root=self.data.parent)
 
-    def test_main_reuses_valid_gofcards_without_acquiring_opposite_inputs(self):
-        # Exercise main's real prerequisite and normalized-cache validators;
-        # stop at the next unrelated resource operation, before any network.
-        selected = self.folder / "selected.original.fa"
-        selected.write_text(">chr1\nA\n")
-        Path(str(selected) + ".fai").write_text(f"chr1\t{PRE.CHR1_LENGTH['hg38']}\t6\t1\t2\n")
-        mapping = self.folder / "original_mapping.tsv"
-        mapping.write_text("Gene stable ID\tTranscript stable ID\tHGNC symbol\tUniProtKB/Swiss-Prot ID\tRefSeq mRNA ID\n"
-                           "ENSG000001\tENST000001\tGENE\tP00001\tNM_000001.1\n")
-        statistics = self.data / "ClinVar/clinvar_2star_stats.pkl.gz"
-        statistics.parent.mkdir(parents=True)
-        with gzip.open(statistics, "wb") as handle:
-            pickle.dump({"GENE": {"ensembl_id": "ENSG000001", "clinvar_pathogenic": set(),
-                                 "large_aachange": set(), "small_aachange": set(),
-                                 "putative_nmd_variants": set()}}, handle)
-        work = self.folder / "build_work"
-        work.mkdir()
-        managed = self.folder / "managed_cache"
-        absent_cache = managed / "VEP_cache"
-        chain = self.data / "liftOver/hg19ToHg38.over.chain"
-        cache = {"metadata": {"source": "GoFCards", "mechanism": "GOF", "vep_cache_version": "113",
-                              "vep_cache_dir": str(absent_cache), "liftover_chain": str(chain)},
-                 "genes": {"GENE": {"variants": {"loc_1:1:A->C_grch37": {
-                     "record": {"eligibility": {"status": "eligible"}, "evidence": [{"pmid": "1"}]},
-                     "assemblies": {"hg38": {"genomic": {"chrom": "1", "pos": 1, "ref": "A", "alt": "C"},
-                                               "transcripts": {"ENST000001": {"by_hgvsc": {"c.1A>C": {}},
-                                                                               "by_hgvsp": {"p.Lys1Gln": ["c.1A>C"]}}}}}}}}}}
-        normalized = work / "gofcards_exact_gof.normalized.json.gz"
-        with gzip.open(normalized, "wt") as handle:
-            json.dump(cache, handle)
-        config = self.folder / "reuse_config.json"
-        original = json.dumps({"assembly": "hg38", "cache_root": str(managed), "tmp_dir": str(self.folder),
-                               "gofcards_exact_gof_cache": str(managed / "gofcards/external_final.json.gz"),
-                               "ref_genome": str(selected), "nm_to_enst_tsv": str(mapping),
-                               "gofcards_workdir": str(work), "vep_installed_version": "113",
-                               "vep_cache_dir": str(absent_cache), "gofcards_builder_script": str(self.folder / "absent_builder.py"),
-                               "gofcards_mechanism_review_tsv": str(self.folder / "absent_review.tsv")})
-        config.write_text(original)
-        body = r'''
-            source "$1" >/dev/null
-            BASE_DIR="$TEST_SOURCE"
-            DATA_DIR="$TEST_SOURCE/data"
-            read_yaml() {
-                "$TEST_PYTHON" -c 'import json,sys; v=json.load(open(sys.argv[1])).get(sys.argv[2]); print("null" if v is None else v)' "$1" "$2"
-            }
-            # Scalar bootstrap is separately covered; retain actual prerequisite/cache routing.
-            priva_cache_install_begin() { PRIVA_CACHE_INSTALL_BUILD_CONFIG=$2; }
-            priva_cache_install_finish() { :; }
-            priva_install_basic_paths() { PRIVA_INSTALL_TMPDIR="$TEST_INSTALL_TMPDIR"; }
-            conda_install_vep() { PRIVA_INSTALL_ENV_NAME=priva_acmg; }
-            nm_to_enst_mapping_install() { :; }
-            # This fixture exercises reference/cache preflight; unrelated fixed
-            # snapshot deployment has its own complete-checkout fixtures.
-            bundled_snapshot_install() { :; }
-            CADD_conda_install() { :; }  # Unrelated frontend deployment is covered separately.
-            Nextflow_runtime_install() { :; }  # Unrelated driver acquisition is covered separately.
-            PriVA_rust_install() { :; }  # No build in a reference preflight fixture.
-            priva_configure_cache_paths() { [[ ${2:-} != --check ]] || printf '%s' '{}'; :; }
-            priva_configure_portable_paths() { :; }
-            reference_genome_install() { printf 'SELECTED_REFERENCE_REUSED\n'; }
-            gofcards_reference_install() { printf 'UNEXPECTED_REFERENCE_ACQUISITION\n'; return 91; }
-            gnomAD_install() { printf 'NEXT_RESOURCE_REACHED\n'; return 73; }
-            main_install "$2"
-        '''
-        env = dict(os.environ, TEST_SOURCE=str(self.data.parent), TEST_PYTHON=sys.executable,
-                   TEST_INSTALL_TMPDIR=str(self.folder),
-                   PRIVA_SMOKE_SKIP_VEP="1", PYTHONDONTWRITEBYTECODE="1",
-                   **fake_priva_binary.environment(self.folder))
-        env.pop("PRIVA_FORCE_GOFCARDS_CACHE", None)
-        env.pop("PRIVA_FORCE_ALL_CACHES", None)
-        result = subprocess.run(["bash", "--noprofile", "--norc", "-c", body, "fixture",
-                                 str(ROOT / "scripts/install_utils.sh"), str(config)],
-                                capture_output=True, text=True, env=env, timeout=30)
-        self.assertIn("normalized cache is current", result.stderr, result.stderr)
-        self.assertIn("NEXT_RESOURCE_REACHED", result.stdout, result.stderr)
-        self.assertNotIn("UNEXPECTED_REFERENCE_ACQUISITION", result.stdout)
-        self.assertEqual(config.read_text(), original)
-        self.assertFalse((self.data / "reference").exists())
-        self.assertFalse(chain.exists())
-
-        # The same missing review becomes required as soon as the cached
-        # normalization no longer matches its scientific VEP inputs.
-        cache["metadata"]["vep_cache_version"] = "112"
-        with gzip.open(normalized, "wt") as handle:
-            json.dump(cache, handle)
-        result = subprocess.run(["bash", "--noprofile", "--norc", "-c", body, "fixture",
-                                 str(ROOT / "scripts/install_utils.sh"), str(config)],
-                                capture_output=True, text=True, env=env, timeout=30)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("rebuild requires the selected nonempty mechanism review", result.stderr)
-        self.assertNotIn("UNEXPECTED_REFERENCE_ACQUISITION", result.stdout)
-        self.assertNotIn("NEXT_RESOURCE_REACHED", result.stdout)
-        self.assertEqual(config.read_text(), original)
 
     def test_configuration_paths_are_quoted_and_unrelated_comments_preserved(self):
         original = 'assembly: hg38\nref_genome: null  # selected reference\nthreads: 7  # keep\n'
@@ -722,35 +601,6 @@ class ReferenceResources(unittest.TestCase):
              contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(REF.main(), 1)
         self.assertEqual(config.read_text(), original)
-
-    def test_shell_entry_points_pass_scope_and_propagate_preparation_failure(self):
-        config = self.folder / "config.yaml"
-        config.write_text("assembly: hg38\n")
-        for function, scope in (("reference_genome_install", "selected"), ("assembly_references_install", "both"),
-                                ("gofcards_reference_install", "gofcards")):
-            with self.subTest(function=function):
-                # The installer runs priva reference-resources once priva is recorded.
-                script = r'''
-                    source "$1" >/dev/null
-                    priva_resolve_binary() { PRIVA_BIN=reference_helper; }
-                    reference_helper() {
-                        printf 'COMMAND:%s\n' "$1" >&2
-                        printf 'HELPER:%s %s %s\n' "$2" "$7" "$8" >&2
-                        printf 'OPT_IN:%s\n' "$9" >&2
-                        return "${FAIL_HELPER:-0}"
-                    }
-                    "$2" "$3"
-                '''
-                command = ["bash", "--noprofile", "--norc", "-c", script, "fixture", str(ROOT / "scripts/install_utils.sh"), function, str(config)]
-                result = subprocess.run(command, capture_output=True, text=True)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn("COMMAND:reference-resources", result.stderr)
-                self.assertIn(f"HELPER:install {scope} --write-config", result.stderr)
-                self.assertIn("OPT_IN:--use-cache-root", result.stderr)
-                failed = subprocess.run(command, capture_output=True, text=True,
-                                        env=dict(os.environ, FAIL_HELPER="71"))
-                self.assertNotEqual(failed.returncode, 0)
-                self.assertEqual(config.read_text(), "assembly: hg38\n")
 
 
 if __name__ == "__main__":

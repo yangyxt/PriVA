@@ -3,13 +3,11 @@ use crate::python_args::{parse_long_option_occurrences, require_options};
 use crate::python_path::path_value;
 use std::collections::HashMap;
 
-const HELP: &str = "usage: priva mapped-artifact {run,recover,adopt-native,context}\n\
+const HELP: &str = "usage: priva mapped-artifact {run,recover,context}\n\
 --artifact FILE --mapping TSV [--input FILE ...] --cache-root DIR --output-dir DIR\n\
---assembly NAME --config YAML --kind {motifs,pm1} --helper-root CHECKOUT\n\
-(--producer SCRIPT | --native-producer pm1-regions)\n\
-[--annotation-base VCF] [--native-lineage JSON] [--python PYTHON]\n\
+--assembly NAME --config YAML --kind pm1 --helper-root CHECKOUT\n\
+(--producer SCRIPT | --native-producer pm1-regions) [--python PYTHON]\n\
 run --expected-identity JSON -- PRODUCER_ARGUMENTS\n\
-adopt-native --source FILE --lineage JSON_FILE\n\
 Optional procedures only. The scientific producer is executed as a literal argument vector.\n\
 --native-producer pm1-regions (with --kind pm1 and an .rkyv --artifact) runs this executable's\n\
 `pm1-regions build` instead of [PYTHON, SCRIPT]; PRODUCER_ARGUMENTS are its exact --name value\n\
@@ -24,7 +22,7 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         println!("{HELP}");
         return Ok(());
     }
-    if !matches!(command, "run" | "recover" | "adopt-native" | "context") {
+    if !matches!(command, "run" | "recover" | "context") {
         return Err(invalid(HELP));
     }
     let mut names = vec![
@@ -38,16 +36,11 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         "producer",
         "native-producer",
         "kind",
-        "annotation-base",
-        "native-lineage",
         "helper-root",
         "python",
     ];
     if command == "run" {
         names.push("expected-identity");
-    }
-    if command == "adopt-native" {
-        names.extend(["source", "lineage"]);
     }
     let arguments = &args[1..];
     let mut split = arguments.len();
@@ -104,27 +97,17 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
     if command == "run" {
         required.push("expected-identity");
     }
-    if command == "adopt-native" {
-        required.extend(["source", "lineage"]);
-    }
     require_options(&options, &required).map_err(invalid)?;
     let select = |name: &str| options.get(name).expect("required option");
-    if !matches!(select("kind").as_str(), "motifs" | "pm1") {
+    if select("kind") != "pm1" {
         return Err(invalid(format!(
-            "argument --kind: invalid choice: '{}' (choose from 'motifs', 'pm1')",
+            "argument --kind: invalid choice: '{}' (choose from 'pm1')",
             select("kind")
         )));
     }
     let native_producer = match native.as_deref() {
         None => None,
-        Some(NATIVE_PM1) if select("kind") == "pm1" && command != "adopt-native" => {
-            Some(std::env::current_exe()?)
-        }
-        Some(NATIVE_PM1) => {
-            return Err(invalid(
-                "--native-producer pm1-regions requires --kind pm1 outside adopt-native",
-            ));
-        }
+        Some(NATIVE_PM1) => Some(std::env::current_exe()?),
         Some(other) => {
             return Err(invalid(format!(
                 "argument --native-producer: invalid choice: '{other}' (choose from 'pm1-regions')"
@@ -147,8 +130,6 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
                 .unwrap_or_default(),
             native_producer,
             kind: select("kind").clone(),
-            annotation_base: options.get("annotation-base").map(|v| path_value(v)),
-            native_lineage: options.get("native-lineage").map(|v| path_value(v)),
             python: options
                 .get("python")
                 .cloned()
@@ -165,10 +146,6 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
                 context.recover()?;
             }
             "run" => context.run(select("expected-identity"), &arguments[split..])?,
-            "adopt-native" => {
-                let encoded = read_text(&path_value(select("lineage")))?;
-                context.adopt(&path_value(select("source")), Value::validate(&encoded)?)?;
-            }
             _ => unreachable!(),
         }
         Ok(())

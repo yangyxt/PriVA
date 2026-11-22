@@ -1,7 +1,5 @@
 use super::content::{Input, Places, content, listing};
-use super::digest::{
-    called_commands, called_words, data_names, dynamic_command, script_names, toplevel_lines,
-};
+use super::digest::{called_commands, dynamic_command, project_paths};
 use super::plan::{add_months, glob_match, header_release, sorted_lines_sha256};
 use super::{delete_key, set_key, yaml_value};
 use crate::sha256::sha256_hex;
@@ -14,32 +12,13 @@ fn scratch(name: &str) -> std::path::PathBuf {
 }
 
 #[test]
-fn message_lines_count_only_command_positions() {
-    let text = "f () \n{ \n    log \"run whole_installer then $(helper_one x) | helper_two\";\n    other_call arg_1 2nd\n}\n";
-    let words: Vec<String> = called_words(text).into_iter().collect();
-    assert!(words.contains(&"helper_one".to_owned()));
-    assert!(words.contains(&"helper_two".to_owned()));
-    assert!(words.contains(&"other_call".to_owned()));
-    assert!(words.contains(&"arg_1".to_owned()));
-    assert!(!words.contains(&"whole_installer".to_owned()));
-    assert!(!words.contains(&"2nd".to_owned()));
-}
-
-#[test]
-fn script_and_data_names_follow_grep() {
-    let text = r#"python "${SCRIPT_DIR}/tool_a.py" x.sh.bak; $SCRIPT_DIR/sub/b.R run.bash "${DATA_DIR}/clingen/map.${assembly}.tsv" DATA_DIR/x"#;
+fn module_paths_are_read_below_project_dir() {
+    let text = r#"python "${projectDir}/scripts/tool_a.py" x; "${projectDir}/data/clingen/map.${assembly}.tsv". ${projectDir}/data/"#;
+    assert_eq!(project_paths(text, "scripts"), vec!["tool_a.py"]);
     assert_eq!(
-        script_names(text),
-        vec!["tool_a.py", "x.sh", "sub/b.R", "run.bash"]
+        project_paths(text, "data"),
+        vec!["clingen/map.${assembly}.tsv"]
     );
-    assert_eq!(data_names(text), vec!["clingen/map.${assembly}.tsv", "x"]);
-}
-
-#[test]
-fn toplevel_keeps_lines_outside_functions() {
-    let text =
-        "A=1\n# comment\nfunction f() {\n    body\n}\nB=2\n\nfunction g() {\n    x\n}\ntrailing\n";
-    assert_eq!(toplevel_lines(text), "A=1\nB=2\ntrailing\n");
 }
 
 #[test]

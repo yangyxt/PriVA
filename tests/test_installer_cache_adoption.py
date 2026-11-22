@@ -228,67 +228,6 @@ class CacheAdoptionTests(unittest.TestCase):
         self.assertEqual(configured["gofcards_mechanism_review_tsv"], str(review))
         self.assertFalse(review.exists())
 
-    def test_missing_or_empty_default_clinvar_survives_planning_preflight_and_refresh_decision(self):
-        spec = importlib.util.spec_from_file_location("clinvar_adoption_policy", ROOT / "scripts/clinvar_gene_refresh.py")
-        refresh = importlib.util.module_from_spec(spec)
-        with mock.patch.object(sys, "path", [str(ROOT / "scripts"), *sys.path]):
-            spec.loader.exec_module(refresh)
-        source_root = self.folder / "fresh_checkout"
-        baseline = source_root / "data/ClinVar/clinvar_2star_stats.pkl.gz"
-        baseline.parent.mkdir(parents=True)
-        registry = {"schema_version": 1, "resources": {
-            "clinvar_gene_statistics": {"refresh": {"threshold_months": 3, "automatic": True,
-                "policy": "latest_filedate_vs_bundled_mtime"}},
-            "clinvar_vcf": {"source": {"latest_url_template": refresh.NCBI + "/pub/clinvar/vcf_{assembly}/clinvar.vcf.gz"}},
-            "clinvar_variant_summary": {"source": {"url": refresh.SUMMARY_URL}},
-            "mane_select": {"source": {"url": refresh.MANE_URL}},
-        }}
-        (source_root / "cache_resources.json").write_text(json.dumps(registry))
-        mapping = self.folder / "selected_mapping.tsv"
-        mapping.write_text("Gene stable ID\tTranscript stable ID\tProtein stable ID\tChromosome/scaffold name\tRefSeq mRNA ID\n"
-                           "ENSG1\tENST1\tENSP1\t1\tNM_1\n")
-        self.settings["nm_to_enst_tsv"] = str(mapping)
-        latest = {"file_date": "2026-04-30", "publisher_md5": "1" * 32}
-        for state in ("missing", "empty"):
-            for selected in ("", baseline.name, str(baseline)):
-                with self.subTest(state=state, selected=selected):
-                    baseline.unlink(missing_ok=True)
-                    if state == "empty":
-                        baseline.touch()
-                    self.settings["clinvar_gene_stat"] = selected
-                    self.write()
-                    original = self.config.read_bytes()
-                    planning = self.folder / "planning.yaml"
-                    self.resolve(output=planning, source_root=source_root)
-                    self.assertEqual(self.config.read_bytes(), original)
-                    self.assertEqual(yaml.safe_load(planning.read_text())["clinvar_gene_stat"], str(baseline))
-                    for config in (planning, self.config):
-                        if config == self.config:
-                            self.resolve(source_root=source_root)
-                        prepared = yaml.safe_load(config.read_text())
-                        self.assertEqual(prepared["clinvar_gene_stat"], str(baseline))
-                        refresh.validate_main(prepared, source_root, allow_missing_bundled_clinvar=True)
-                        with mock.patch.object(refresh, "latest_metadata", return_value=latest):
-                            plan = refresh.plan_refresh(config, source_root)
-                        self.assertEqual(plan["action"], "rebuild")
-                        self.assertTrue(plan["baseline_missing"])
-                        self.assertTrue(Path(plan["output_path"]).is_relative_to(self.cache))
-                    self.assertEqual(baseline.exists(), state == "empty")
-                    if baseline.exists():
-                        self.assertEqual(baseline.stat().st_size, 0)
-        custom = self.folder / "explicit_missing_clinvar.pkl.gz"
-        self.settings["clinvar_gene_stat"] = str(custom)
-        self.write()
-        original = self.config.read_bytes()
-        with self.assertRaisesRegex(ValueError, "refusing to substitute another dataset/release"):
-            self.resolve(output=self.folder / "custom-planning.yaml", source_root=source_root)
-        self.assertEqual(self.config.read_bytes(), original)
-        with self.assertRaises(ValueError):
-            refresh.validate_main(self.settings, source_root, allow_missing_bundled_clinvar=True)
-        with mock.patch.object(refresh, "latest_metadata") as network:
-            with self.assertRaises((ValueError, OSError)):
-                refresh.plan_refresh(self.config, source_root)
-        network.assert_not_called()
 
     def test_explicit_derived_bytes_and_scientific_companion_are_copied_unchanged(self):
         source = self.folder / "selected_motifs.pkl"

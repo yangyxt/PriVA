@@ -98,15 +98,20 @@ standalone diagnostic or cache-building entry point native.
 
 ## Installation builders
 
-Installer callers remain Python unless their row says the installer calls
-`priva`, or they are routed through the native cache conversion interface. Optional native procedures can be invoked directly.
+The "Installer calls" notes in the two tables below name the functions of
+the shell installer (`install_utils.sh`) that ran each command until phase 7
+removed it (commit 841e200 is the last tree that has it). The install steps
+now run the same `priva` commands from their own processes
+(`modules/local/install_steps/`; `conf/install_steps.json` names each
+step's module and `priva install-task reach --step ID` lists its commands).
+A row whose script is gone says so. Optional native procedures can be invoked directly.
 
 ### Scripts that build reference data once, at installation
 
 | Python source | Native procedure or current role |
 | --- | --- |
 | [`scripts/SpliceVault_tsv_vcf_conversion.py`](../scripts/SpliceVault_tsv_vcf_conversion.py) | Optional `priva splicevault-convert`. Installer calls `priva splicevault-convert`; CrossMap remains required. Installed BGZF route; general archive-byte/ZIP64 behavior is outside its qualified profile. |
-| [`scripts/alphamissense_annotation_base.py`](../scripts/alphamissense_annotation_base.py) | Optional `priva alpha-annotation-base`: profile/header checks, base pair publication/recovery and completed motif adoption. `motif-runtime` explicitly observes the original Python package environment; motif adoption uses the native BioMart identity/receipt API. No annotation/model generation. `AlphaMissense_anno` calls it for path, recover, check, runtime-associated, restore, capture and publish (November 2026); on the G9 installation it captured the same record as the Python helper. |
+| [`scripts/alphamissense_annotation_base.py`](../scripts/alphamissense_annotation_base.py) | The original of the header check and file helpers that `priva alphamissense-cache check-annotation`, `clinvar-gene-refresh check-header` and `mapped-artifact` share (`src/alpha_annotation_base/`). `priva alpha-annotation-base` (path, recover, check, capture, publish, restore, motif adoption), which only the installer's `AlphaMissense_anno` ran, was removed in phase 7: C3 runs VEP into its own folder (phase 6). Kept because `mapped_artifact_publish.py` imports it. |
 | [`scripts/alphamissense_cache.py`](../scripts/alphamissense_cache.py) | Optional `priva alphamissense-cache {install,validate,check-annotation}` with the script's options; the subcommand comes first. The pinned publisher size and MD5, the bounded schema probe, the install lock, adoption of a supplied or symlinked source, the resumed `curl` download, retained replaced artifacts, the rebuilt `tabix` index with its first-record probe and the ready receipt follow the script; `bgzip -t`, `tabix` and `curl` remain external tools. `check-annotation` is the native header check `alpha-annotation-base` already uses. Installer calls `priva alphamissense-cache install` in `AlphaMissense_install` and `check-annotation` in `AlphaMissense_anno`. Compared by `rust/tests/alphamissense_cache_compare.py` (success paths on the real hg19 publisher file; no case reaches the network). |
 | [`scripts/alphamissense_domain_cache.py`](../scripts/alphamissense_domain_cache.py) | Replaced in the installer: `AlphaMissense_stat` calls `priva alphamissense-domain chromosome` for every VCF header contig (completed chromosomes are kept for a resumed run), then `merge`, and reuses a complete Parquet through `check --vcf --builder-sha256` with its recorded identity. Retained for manual use. |
 | [`scripts/alphamissense_original_cache.py`](../scripts/alphamissense_original_cache.py) | Legacy/manual helper, outside native conversion scope. The installer no longer reads its receipts; completed Python statistics stay in use only through a valid Python DAS receipt. |
@@ -124,7 +129,7 @@ Installer callers remain Python unless their row says the installer calls
 | [`scripts/build_hpo_condition_mechanism_cache.py`](../scripts/build_hpo_condition_mechanism_cache.py) | Optional `priva hpo-condition-mechanism --source-root CHECKOUT` with the script's options. The HPO frame and its MONDO merge, the G2P/Orphadata mechanisms and penetrance, ClinGen haploinsufficiency, the GoFCards exact alleles with their ClinVar condition links, the deduced recessive LOF, the scope gate, the payload and provenance checks and the atomic publication follow the script; the default ClinGen table comes from the checkout, and the cache records the checkout's Python builder as its builder source, so either one accepts the other's cache. Input tables are decoded completely before their rows are read. Installer calls `priva hpo-condition-mechanism` when `hpo_condition_mechanism_builder_script` is the checkout's script; another configured script still runs with Python. `rust/tests/hpo_condition_mechanism_compare.py` compares them. |
 | [`scripts/build_mondo_disease_scope.py`](../scripts/build_mondo_disease_scope.py) | Optional `priva mondo-scope`. Installer calls `priva mondo-scope build`, and `priva mondo-scope validate` for the finished registry and scoped HPO assertions. |
 | [`scripts/clinvar_annotation_contract.py`](../scripts/clinvar_annotation_contract.py) | Replaced in the installer by `priva clinvar-contract`; see the installer helpers table. |
-| [`scripts/clinvar_gene_refresh.py`](../scripts/clinvar_gene_refresh.py) | Optional `priva clinvar-gene-refresh {plan,install,deploy,retire-owned,retire-shards,check-header,acquire,file-date,candidate-route,candidate-begin,candidate-complete}` with the script's options; the subcommand comes first. The registry policy, the bounded fileDate checks, the NCBI MD5 and 1 MiB header probes (`curl`), the scientific profile and its signature, completed-receipt reuse, the locked deployment with retained generations and recovery journals, the candidate receipts and the configuration rewrite follow the script; the original ClinVar stages still run through `install_utils.sh`. The profile observes the Python runtime with one `python -c` so that signatures and workspaces stay those of the script and `vep_chromosome_jobs.py`. Installer calls `priva clinvar-gene-refresh` in `ClinVar_install`, `ClinVar_VCF_deploy` and `_ClinVar_VCF_deploy`; `annotation_vcf.sh` calls it for `retire-shards` and the candidate phases. Retained for `vep_chromosome_jobs.py` and the Python tests. `rust/tests/clinvar_gene_refresh_compare.py` compares it with the script. |
+| `scripts/clinvar_gene_refresh.py` (removed in phase 7) | `priva clinvar-gene-refresh {download,check-header,due}`: D0 downloads the release, D1 checks the annotated header and decides whether the gene statistics are rebuilt (`policy.rs`). The other subcommands (plan, install, deploy, retire-owned, retire-shards, acquire, file-date and the candidate phases) ran only inside the shell installer and `annotation_vcf.sh` and went with them, as did the script and `rust/tests/clinvar_gene_refresh_compare.py`. |
 | [`scripts/clinvar_stat_variants.py`](../scripts/clinvar_stat_variants.py) | Optional `priva clinvar-gene-stats build/merge` with an explicit Python hash seed and recorded completion order for reference comparisons. Installer calls `priva clinvar-gene-stats build` in `ClinVar_Gene_stat_regenerate` with `--python-hash-seed` from `priva_python_hash_seed` (default 0) and writes the refresh candidate `clinvar_2star_stats.rkyv`; the bundled pickle is still converted by `cache-install publish`. |
 | [`scripts/collapse_HPO_anno.py`](../scripts/collapse_HPO_anno.py) | Optional `priva hpo-assertions build`. Installer calls `priva hpo-assertions build`. |
 | [`scripts/domain_metadata_cache.py`](../scripts/domain_metadata_cache.py) | Optional `priva domain-metadata`. Installer calls `priva domain-metadata build --assembly` (reused through its `.source.json`) for the DAS coldspot filter and writes `domain_metadata.{asm}.parquet`. |
@@ -140,32 +145,32 @@ Installer callers remain Python unless their row says the installer calls
 
 ## Installer helpers
 
-### Installer and cluster deployment helpers
+### Installer helpers
+
+Removed in phase 7 with the shell installer and the cluster scripts:
+`cache_resources.py` (its `list`, `show`, `refresh-plan` and `validate` are
+`priva cache-resources`, which now checks the inventory's routes against
+`conf/install_steps.json`), `check_cluster_environment.py`,
+`check_cluster_readiness.py`, `deploy_cluster_gnomad.py`,
+`deploy_cluster_plugin_inputs.py`, `deploy_cluster_resources.py`,
+`prepare_cluster_config.py`, `vep_chromosome_cache.py` and
+`vep_chromosome_jobs.py` (the D1 chain splits ClinVar by chromosome itself).
 
 | Python source | Native procedure or current role |
 | --- | --- |
-| [`scripts/cache_resources.py`](../scripts/cache_resources.py) | Optional `priva cache-resources list/show/refresh-plan/validate` with an explicit registry and Python hash seed. Existing callers remain Python; unusual JSON/set boundaries are documented in the user manual. |
-| [`scripts/check_cluster_environment.py`](../scripts/check_cluster_environment.py) | Retained Python environment inspection. |
-| [`scripts/check_cluster_readiness.py`](../scripts/check_cluster_readiness.py) | Legacy/manual helper, outside native conversion scope. |
 | [`scripts/clinvar_annotation_contract.py`](../scripts/clinvar_annotation_contract.py) | Optional `priva clinvar-contract` header, native cache-shape, AF path and AA/splice completion-association procedures. Original source assets remain explicit. `legacy-cache` applies the same shape checks to the Python pickles of an existing installation through the restricted pickle reader; a pickle it cannot read fails the check, so the stage rebuilds. Installer calls `priva clinvar-contract header`, `cache`, `legacy-cache`, `af-paths-check` and `pair-capture`/`pair-check`/`pair-complete` (with `--contract-source` naming the Python contract, whose SHA-256 the pair receipts keep) in the ClinVar VCF deployment, AA/splice, AF, gene-statistics regeneration and PM5 stages. The Python module stays for `clinvar_stat_variants.py` and the tests. |
 | [`scripts/conservation_resource_check.py`](../scripts/conservation_resource_check.py) | Optional `priva conservation-resource`. Installer calls `priva conservation-resource validate/publish`. |
 | [`scripts/das_input_continuity.py`](../scripts/das_input_continuity.py) | Optional `priva das-input-continuity check/record`; verifies prepared ordered-consumer equivalence proofs and preserves original DAS outputs. Requires the pinned checker source asset, never a Python process. Installer caller remains Python. |
 | [`scripts/das_install_state.py`](../scripts/das_install_state.py) | Optional `priva das-install-state capture/check/record`. Preserves completion receipt v3, source-role hashes, metadata identity and bundled existence/nonzero checks. Installer calls `priva das-install-state` for native DAS builds, with `priva builder-identity` output as the source roles; the legacy Python DAS receipt check remains Python. |
-| [`scripts/deploy_cluster_gnomad.py`](../scripts/deploy_cluster_gnomad.py) | Legacy/manual helper, outside native conversion scope. |
-| [`scripts/deploy_cluster_plugin_inputs.py`](../scripts/deploy_cluster_plugin_inputs.py) | Legacy/manual helper, outside native conversion scope. |
-| [`scripts/deploy_cluster_resources.py`](../scripts/deploy_cluster_resources.py) | Legacy/manual helper, outside native conversion scope. |
 | [`scripts/gnomad_cache.py`](../scripts/gnomad_cache.py) | Optional `priva gnomad-cache {members,validate,default-path}` with the script's options; the subcommand comes first. Uses the family naming, header, assembly and first-indexed-record checks that `installer-config-paths` adoption already reproduces, read by the native BGZF and tabix/CSI readers instead of htslib. Installer calls `priva gnomad-cache default-path/validate` in `gnomAD_install`. Compared by `rust/tests/gnomad_cache_compare.py` on generated families (no gnomAD data is read). |
 | [`scripts/indexed_plugin_cache.py`](../scripts/indexed_plugin_cache.py) | Optional `priva indexed-plugin-cache ensure-index/format-primate`. Retains bgzip, tabix and GNU sort; installer calls `priva indexed-plugin-cache`. |
 | [`scripts/installed_environment.py`](../scripts/installed_environment.py) | Optional `priva installed-environment export/export-installation` for package-only YAML exports. Retains the installed package manager and statically linked libyaml; installer calls `priva installed-environment export-installation`. |
 | [`scripts/installer_config_paths.py`](../scripts/installer_config_paths.py) | Optional `priva installer-config-paths {resolve,managed-roots} --config CONFIG --source-root CHECKOUT` with `--check`, `--output` and `--managed-updates-json`, plus the library procedures (`portable-updates`, `resolve-cache-paths`, `defaults`, `resource-groups`, `adoption-plan`, `adopt-sources`, `render` and the path, identity and gnomAD checks) for comparison. Planning, defaults, byte-preserving adoption with companions, retained earlier files, the adoption lock and receipt, and the atomic configuration rewrite follow the script; configuration YAML is read with the script's duplicate-key refusal, and escaped surrogate code points survive. It needs an explicit `PYTHONHASHSEED` (the script's replacement-table set order) and refuses a checkout whose `spliceai_cache_input.py` or `gnomad_cache.py` differs from the built copy. `CADD_install` calls `managed-roots` with `PYTHONHASHSEED=0`; the configuration steps of `priva_prepare_install_config` run before `PriVA_rust_install` records `priva_binary` and remain Python. Compared by `rust/tests/installer_config_paths_compare.py`. |
 | [`scripts/installer_prerequisites.py`](../scripts/installer_prerequisites.py) | Optional `priva installer-prerequisites CONFIG --source-root CHECKOUT` with every `--stage` and option; `--source-root` is required. Reads YAML through `yaml_config` (refuses anchors and other unsupported constructs) and reads only plain-data ClinVar pickles; `--allow-pinned-reference-defaults` plans and checks the references with the native `reference-resources` procedures. `--stage manual-inputs --prompt` at a terminal collects unset paths and rewrites the configuration through the native `render_config` of `installer_config_paths.py`. Installer calls `priva installer-prerequisites` for the mapping check of the AlphaMissense motif and PM1 producers, `ClinVar_Gene_stat` and the GoFCards build checks (including the build route's pinned-reference preflight). The main, manual-input, snapshot, NM-to-ENST installation and GoFCards main-preflight calls run before `PriVA_rust_install` records `priva_binary` and remain Python. Compared by `rust/tests/installer_prerequisites_compare.py`. |
-| [`scripts/mapped_artifact_publish.py`](../scripts/mapped_artifact_publish.py) | Optional `priva mapped-artifact run/recover/adopt-native/context`: native BioMart checks, literal external producer arguments, pending pair publication and preserved-artifact adoption. Scientific producers remain external. Installer calls `priva mapped-artifact recover/run --native-producer pm1-regions` in `prepare_pm1_regions`; the AlphaMissense motif caller remains Python. `--native-producer pm1-regions` instead runs this executable's `pm1-regions build` (exact `--name value` pairs bound to the selected assembly, mapping and HCSeeker/RMC anchors) and publishes `pm1_regions.{asm}.rkyv`; the context and receipt record `native_producer`. `biomart artifact-route/changed-target --artifact-format rkyv` names that archive. |
+| [`scripts/mapped_artifact_publish.py`](../scripts/mapped_artifact_publish.py) | Optional `priva mapped-artifact run/recover/context --kind pm1`: native BioMart checks, literal external producer arguments and pending pair publication. C11 runs `priva mapped-artifact run --native-producer pm1-regions`, which runs this executable's `pm1-regions build` (exact `--name value` pairs bound to the selected assembly, mapping and HCSeeker/RMC anchors) and publishes `pm1_regions.{asm}.rkyv`; the context and receipt record `native_producer`. The AlphaMissense motif kind and `adopt-native` served only the installer's motif step and were removed in phase 7; the script keeps both. `biomart artifact-route/changed-target --artifact-format rkyv` names the archive. `rust/tests/mapped_artifact_compare.py` compares the PM1 kind. |
 | [`scripts/mechanism_source_input.py`](../scripts/mechanism_source_input.py) | Optional `priva mechanism-source validate/record-source/check-source` for acquired-source validation and receipts. Retains distinct acquisition/runtime checks and bundled reuse policy. `ClinGen_deploy` and `priva_clingen_download` call it (November 2026). |
-| [`scripts/prepare_cluster_config.py`](../scripts/prepare_cluster_config.py) | Legacy/manual helper, outside native conversion scope. |
 | [`scripts/reference_resources.py`](../scripts/reference_resources.py) | Optional `priva reference-resources {sources,preflight,install} [CONFIG] --data-dir DATA` with `--scope`, `--use-cache-root` and `--write-config`; `--data-dir` is required for preflight and install. Planning (managed defaults, legacy-default redirection, cache_root routing, the inspection-root policy), FASTA, index and forward-chain checks, pinned-source receipts, per-resource locks, link-based publication, `samtools faidx` index repair and the configuration rewrite follow the script; YAML is read through `yaml_config` (refuses anchors and flow/JSON documents). The download of a missing pinned UCSC archive runs `curl` with the same URL, Range, status and Content-Range rules; transport failures carry curl's message. Installer calls `priva reference-resources install` in `reference_genome_install`, `assembly_references_install` and `gofcards_reference_install`; the selected-reference preflight in `priva_install_prerequisites` runs before `PriVA_rust_install` records `priva_binary` and remains Python. Compared by `rust/tests/reference_resources_compare.py` (no case reaches the network). |
 | [`scripts/spliceai2_to_vep_vcf.py`](../scripts/spliceai2_to_vep_vcf.py) | Optional `priva spliceai2-prepare {prepare,gene-context}` with the script's options; the subcommand comes first. Manifest, input and tool verification, the GENCODE48 gene context with the VEP release's gene names, the gzip, projection and bgzip pipeline, the tabix index with its first-record probe, the receipt and the publication order follow the script. By decision (4 Nov 2026) the projection runs as this executable's `spliceai2-vcf` instead of a converter compiled from `spliceai2_converter.rs` with rustc at installation: `build-converter` is not provided, and the receipt's `converter` (`role` `priva_builtin`) and `driver_sha256` name this executable. `--converter-bin` still runs an explicit standalone converter. Installer calls `priva spliceai2-prepare prepare` in `SpliceAI2_install`. Rust-only `--jobs N` checks and converts the shards N at a time and joins the BGZF parts; `rust/tests/spliceai2_prepare_jobs_compare.py` checks it against one job on real shards. Compared by `rust/tests/spliceai2_prepare_compare.py`. |
-| [`scripts/vep_chromosome_cache.py`](../scripts/vep_chromosome_cache.py) | Legacy/manual helper, outside native conversion scope. |
-| [`scripts/vep_chromosome_jobs.py`](../scripts/vep_chromosome_jobs.py) | Legacy/manual helper, outside native conversion scope. |
 | [`scripts/vep_plugins_release.py`](../scripts/vep_plugins_release.py) | Optional `priva vep-plugins {check,install,transition,clear-transition,ensure-utr-reporting} --release RELEASE` with the same options; the mode comes first. Receipt checks, local-patch recognition, staged publication with the release-switch and partial-retry rules, the transition record, and the locked UTRAnnotator 116 reporting transaction (pinned upstream and installed bytes, original and patch backups, the pending recovery receipt) follow the script; the patch is the same `difflib.unified_diff` text. The bundled reporting module is read from `PRIVA_DATA_DIR`. Installer calls `priva vep-plugins check/install/ensure-utr-reporting/clear-transition` in `vep_cache_api_install`, and `transition` in `conda_install_vep`, which builds `priva` first (`priva_bootstrap_binary`) when the environment's VEP release changes. Compared by `rust/tests/vep_plugins_compare.py` (no case reaches the network). |
 
 ## Task adapters and bridges
@@ -414,21 +419,28 @@ Whole cohort, 2026-11-17: the program of af24fcf replayed the ACMG step of all 4
 | --- | --- |
 | `INSTALL_RELEASE` | `priva install-task release`, once per step with a changing source (registry `release`): the current git commit, or the server's ETag, Last-Modified and size (an answer without ETag and Last-Modified, such as an API, by the SHA-256 of its sorted lines: the ClinGen evidence repository returns the same rows in varying order). Pinned steps run it only when `--refresh` names them or their pin can expire (`max_age_months`) |
 | `INSTALL_PLAN` | Copies your configuration without any key an install step writes, and records each step's code digest (described below), its settings and the files you supply |
-| `INSTALL_STEP` (one alias per step without a `module`) | `priva install-task run`: a private configuration whose `cache_root` is `resource_root/STEP/LINEAGE/data`, the keys of the input receipts, then the unchanged installer functions with `PRIVA_CACHE_INSTALL_INTERNAL=1`; the output keys are checked and `receipt.json` is written; the folder is then made read-only unless the step is marked writable (CADD) |
-| A step's own process (registry `module`) | the tools' commands and `priva` in its `script:` block, then `priva install-task record` (phase 3 below) |
+| A step's own process (registry `module`, every step since phase 6) | the tools' commands and `priva` in its `script:` block, then `priva install-task record` (phase 3 below) |
+| `INSTALL_STEP` (removed in phase 7) | `priva install-task run`: a private configuration whose `cache_root` is `resource_root/STEP/LINEAGE/data`, the keys of the input receipts, then the unchanged installer functions with `PRIVA_CACHE_INSTALL_INTERNAL=1`; the output keys were checked and `receipt.json` written; the folder was then made read-only unless the step was marked writable (CADD) |
 | `INSTALL_PUBLISH` | One configuration from every receipt, `priva cache-install prepare` and `publish` for the native statistics files, and `resources.lock.json` |
 
 A step's lineage hashes its code digest, settings, supplied files, the release of a changing source (only for steps that have one), the `priva` source identity (only for steps whose results `priva` computes) and the lineage of every step it needs. SpliceVault (B5), MaveDB (B6), UTRannotator (B1) and LOFTEE (B8) are pinned: their lineage uses the release recorded in `resource_root/pins.json` (`initial` before any refresh) until `--refresh B5,B8` checks them again, and publish then records the new release there with the day it was taken (`{"release": ..., "recorded": "YYYY-MM-DD"}`; a release already pinned keeps its day). The ClinVar download (D0) is pinned with `max_age_months: 3`, the original installer's refresh interval: its release is kept until three calendar months after the day it was taken (the day clamped to the month's length, as `add_calendar_months` does), then the current release is used. `storeDir` reuses a lineage folder that holds a receipt, across runs and after the work folder is deleted. A step that rewrites an input in place (`copies`) works on a copy in its own folder. `--adopt_config` with `--adopt all --run_steps ID,...` writes receipts for an existing installation's files instead of building them.
 
-A step's code digest covers what the step runs (`rust/src/install_task/digest.rs`; `priva install-task reach --registry R --step ID --source-root CHECKOUT` lists it):
+A step's code digest covers what the step runs (`rust/src/install_task/digest.rs`; `priva install-task reach --registry R --step ID --source-root CHECKOUT` lists it). Since phase 7 every step is its own process, and the digest is:
 
 - its registry entry;
-- the text of every installer function it reaches: from its `calls`, and from its `runs` (installer functions that a program of the step runs itself: `priva clinvar-gene-refresh` runs `ClinVar_VCF_deploy`, `_ClinVar_VCF_deploy`, `ClinVar_AA_stat`, `ClinVar_Gene_stat` and `ClinVar_Gene_stat_regenerate` for D1, and `priva spliceai-cache-input` runs `SpliceAI2_install` for B4), through every function those name. In a `log`, `echo` or `printf` line a name counts only where a command can start (after `$(`, a backquote, `|`, `&` or `;`);
-- the lines of `install_utils.sh`, `common_bash_utils.sh` and `annotation_vcf.sh` outside any function (comments and blank lines left out); these three files are otherwise counted by function, not whole;
-- the content of every other script file those functions name, by a script file name or as `SCRIPT_DIR/NAME` (so `argparse.bash` and `anno_vep_args` count for the VEP steps), and of the Python files in `scripts/` that such a Python script imports, and those import (`clinvar_vcv.py` for F5 to F9);
-- the content of every data file shipped with the repository that those functions name as `DATA_DIR/PATH`, with `${assembly}` read as hg19 and as hg38 (`step_data`; 9 files over 10 steps, for example the HGNC table for F5 and F6). A file counts when the source tree has it and, in a git checkout, git tracks it.
+- the text of its Nextflow module's process;
+- the content of every script file the module names (`${projectDir}/scripts/NAME`), and of the Python files in `scripts/` that such a Python script imports, and those import;
+- the content of every data file shipped with the repository that the module names (`${projectDir}/data/PATH`, with `${assembly}` read as hg19 and as hg38). A file counts when the source tree has it and, in a git checkout, git tracks it;
+- the Rust files of every `priva` command the module runs (`"$PRIVA_BIN" COMMAND`, or the registry's `priva_commands` when the module picks a command at run time), and the files those reach (`nextflow_task/rust_reach.rs`, also used by the annotation hub lineages), with comments and blank lines left out.
 
-Before commit `a1f22c5` every name in a function's text counted, so the message "run main_install" in `priva_resolve_binary` tied most steps to 118 functions and the whole `install_utils.sh` (the same ClinVar release got three D0 lineages in three test runs), while D1's digest missed the ClinVar stages that `priva` runs. `tests/install_workflow_check.py` fails when a Rust source names an installer function that no step reaches. Not counted: a shipped data file that a function reaches another way than as `DATA_DIR/PATH` (through a configuration key, or a path put together while it runs, such as the files `priva_bundled_cache_reuse` names by key), and the install runner itself (`priva install-task`, formerly `scripts/install_task.sh`); a step whose results `priva` computes counts the whole `rust` tree instead.
+Until phase 7 a step without a module counted the installer functions it reached instead of a module:
+
+- the text of every installer function it reached: from its `calls`, and from its `runs` (installer functions that a program of the step ran itself: `priva clinvar-gene-refresh` ran `ClinVar_VCF_deploy`, `_ClinVar_VCF_deploy`, `ClinVar_AA_stat`, `ClinVar_Gene_stat` and `ClinVar_Gene_stat_regenerate` for D1, and `priva spliceai-cache-input` ran `SpliceAI2_install` for B4), through every function those named. In a `log`, `echo` or `printf` line a name counted only where a command can start (after `$(`, a backquote, `|`, `&` or `;`);
+- the lines of `install_utils.sh`, `common_bash_utils.sh` and `annotation_vcf.sh` outside any function (comments and blank lines left out); these three files were otherwise counted by function, not whole;
+- the content of every other script file those functions named, by a script file name or as `SCRIPT_DIR/NAME` (so `argparse.bash` and `anno_vep_args` counted for the VEP steps), and of the Python files they import;
+- the content of every shipped data file those functions named as `DATA_DIR/PATH` (`step_data`; 9 files over 10 steps, for example the HGNC table for F5 and F6).
+
+Before commit `a1f22c5` every name in a function's text counted, so the message "run main_install" in `priva_resolve_binary` tied most steps to 118 functions and the whole `install_utils.sh` (the same ClinVar release got three D0 lineages in three test runs), while D1's digest missed the ClinVar stages that `priva` ran. Until phase 7, `tests/install_workflow_check.py` failed when a Rust source named an installer function that no step reached. Not counted then: a shipped data file that a function reached another way than as `DATA_DIR/PATH` (through a configuration key, or a path put together while it ran, such as the files `priva_bundled_cache_reuse` named by key); a step whose results `priva` computed counted the whole `rust` tree instead, until phase 1. Never counted: the install runner itself (`priva install-task`, formerly `scripts/install_task.sh`).
 
 Digest test with stub steps (job 1545892, `validation/install_workflow_20261110/digest_1545892`, commit `c85f8ea`): 84 folders on the first run, none new on the second; D0 reaches 5 functions (before: 119), D1 49, a ClinVar VEP piece 29. One no-op line added to a function or script gave new folders for exactly the steps whose reach lists it and the steps that need them: `main_install` none; `_ClinVar_VCF_deploy` D1, C10, C11, D6, D8, D9, F9 and publish; `_priva_run_VEP_command` and `scripts/argparse.bash` those and the 25 ClinVar VEP pieces, not D0 or D1_split; `SpliceAI2_install` those and B4. Imported Python files and shipped data files joined the digest in commit `1ed35f9`; job 1547470 (`digest_1547470`) repeated the test with two more cases and passed: one line added to `scripts/clinvar_vcv.py`, which no function names, and one to `data/hgnc/hgnc_non_alt_loci_set_sha256_890b18743cc8.tsv` each gave new folders for F5, F6, F7, F8, F9 and publish, the steps whose reach lists the file and the steps that need them.
 
@@ -443,7 +455,7 @@ Most steps are one existing installer function. gnomAD and ClinVar are split fur
 | `D1_chr1` … `D1_chrY`, `D1_chrOther` | `ClinVar_vep_chrom`: the original VEP command (`anno_VEP_cache_worker`) on one piece with 22 forks, the per-chromosome route compared with the whole-release run on 26 October 2026 (jobs 1524533 and 1524532: 4,597,985 ordered rows, 4 differing only in HGNC_ID); VEP 116 starts up to forks + 1 children besides its parent, so each task has 24 CPUs (40 GB); a piece without records skips VEP |
 | `D1` | `ClinVar_install` as before, but the refresh plan judges D0's release instead of asking NCBI, the acquisition checks D0's files by MD5 instead of downloading, and the branch that keeps the bundled gene statistics deploys D0's VCF. In `_ClinVar_VCF_deploy`, `clinvar_vep_split` replaces VEP on the whole file: `_ClinVar_vep_gather` checks that its renamed records have the SHA-256 that D1_split recorded and that the pieces' VEP headers agree (apart from VEP's command line and start time), then sorts the outputs into the ClinVar VCF with `bcftools sort`, as the whole-file route sorts VEP's output, between the same candidate `begin` and `complete` records. Without `clinvar_vep_split` (the original installer), VEP runs on the whole file with `threads` forks |
 
-The runner turns `pipefail` off while an installer function runs, as the original installer does: checks written as `bcftools view FILE | head -200` otherwise fail on any VCF longer than 200 lines.
+The runner turned `pipefail` off while an installer function ran, as the original installer did: checks written as `bcftools view FILE | head -200` otherwise fail on any VCF longer than 200 lines.
 
 Wiring test with stub steps (job 1540683, 57 steps): 58 folders on the first run, none new on the second; a changed `mavedb_url` gave new folders for exactly B6, C10, C11, D1, D6, D8, D9, F9 and publish; `--refresh B5` the same set with B5 and recorded B5 in `pins.json`, and the next run without it nothing new; D0 pinned to another release taken today gave new folders for D0 and the steps it reaches, and the same pin dated 2020 had expired, so the current release (and the earlier folders) came back. Live release checks of all eleven sources: `validation/install_workflow_20261110/release_live2`, stable on repeat (`release_live4`, `release_live5`).
 
@@ -465,17 +477,18 @@ Goal: `nextflow run main.nf --action install` is the only installer, every
 task of the install and the analysis is a Nextflow process, and PriVA's own
 shell glue (`install_utils.sh`, `annotation_vcf.sh`,
 `filtration_vcf_per_fam.sh`, `prioritization_vcf_per_fam.sh`,
-`common_bash_utils.sh`) and the Python it calls are gone.
+`common_bash_utils.sh`) and the Python it calls are gone. Phase 7 reached it
+(below).
 
 The rule for every step: **mature tools keep their own commands.** VEP,
 upstream `CADD.sh`, bcftools, tabix, bgzip, samtools, CrossMap, curl, git and
 conda run as they are, as lines of a Nextflow process's `script:` block.
 What moves into `priva` is PriVA's own logic around them: checks, receipts,
-reuse decisions, configuration keys. That is what the shell functions do today.
+reuse decisions, configuration keys. That is what the shell functions did.
 
 ```mermaid
 flowchart LR
-  subgraph now["Now: one install step"]
+  subgraph now["Before: one install step"]
     direction TB
     N1["Nextflow process INSTALL_STEP"] --> N2["priva install-task run"]
     N2 --> N3["bash: source install_utils.sh<br/>(5,606 lines, 114 functions)"]
@@ -483,7 +496,7 @@ flowchart LR
     N4 --> N5["vep / bcftools / tabix"]
     N4 --> N6["checks, receipts, yq edits<br/>(shell, some Python)"]
   end
-  subgraph goal["Goal: the same step"]
+  subgraph goal["After: the same step"]
     direction TB
     G1["Nextflow process CLINVAR_VEP_CHROM<br/>inputs and outputs as channels"] --> G5["vep / bcftools / tabix<br/>(their own command lines)"]
     G1 --> G6["priva install check / record<br/>(checks, receipts)"]
@@ -1483,6 +1496,124 @@ Changes you can notice:
   `vep_cache_api_install` did.
 - F5 and F7 to F9 and publish get new lineages.
 
+### Phase 7: the shell installer and the shell glue removed (22 November 2026)
+
+Phase 6 left `install_utils.sh` only for `main_install` and the cluster
+scripts, and `annotation_vcf.sh` only for `--phase annotation` in raw mode,
+which no workflow starts (raw mode runs one task per annotation step since
+phase 4). Phase 7 deletes them, the other shell scripts, and the Python and
+Rust code that only they ran. The tools keep their own commands in the
+processes, as before; nothing that a workflow runs changed its commands.
+
+```mermaid
+flowchart LR
+  subgraph before["841e200 (phase 6)"]
+    direction TB
+    B1["main_install, install_cluster.sh,<br/>six *.sbatch scripts"] --> B2["install_utils.sh<br/>(5,374 lines)"]
+    B3["nextflow run main.nf --action install"] --> B4["84 step processes"]
+    B5["priva task run --phase annotation<br/>(raw mode; no workflow starts it)"] --> B6["annotation_vcf.sh,<br/>common_bash_utils.sh"]
+    B7["annotation, filtration and<br/>prioritization tasks"] --> B8["priva task step"]
+    B9["example/smoke_test.py"] --> B10["filtration_vcf_per_fam.sh,<br/>prioritization_vcf_per_fam.sh"]
+  end
+  subgraph after["phase 7"]
+    direction TB
+    A3["nextflow run main.nf --action install"] --> A4["84 step processes"]
+    A5["priva task run --phase annotation<br/>(raw mode)"] --> A6["refused: one step per task"]
+    A7["annotation, filtration and<br/>prioritization tasks"] --> A8["priva task step"]
+    A9["example/smoke_test.py"] --> A10["priva task step filtration,<br/>combine, prioritization"]
+  end
+```
+
+Removed (about 45,800 lines with the tests; commit 841e200 is the last tree that has them):
+
+| Group | Removed | Only caller |
+| --- | --- | --- |
+| Shell installer | `scripts/install_utils.sh` (5,374 lines), `install_cluster.sh`, `build_cluster_alpha.sbatch`, `build_cluster_gnomad.sbatch`, `build_cluster_splicevault.sbatch`, `diagnose_cluster_install.sbatch`, `import_cluster_licensed.sbatch`, `rerun_cluster_install.sbatch`, `prepare_cluster_config.py`, `deploy_cluster_gnomad.py`, `deploy_cluster_plugin_inputs.py`, `deploy_cluster_resources.py`, `check_cluster_environment.py`, `check_cluster_readiness.py`, `envs/priva-cluster.yml`, `envs/cluster-*.json` | `main_install` and the cluster scripts |
+| Analysis shell glue | `annotation_vcf.sh` (1,827), `common_bash_utils.sh` (1,627), `filtration_vcf_per_fam.sh` (356), `prioritization_vcf_per_fam.sh` (430), `anno_main_args`, `anno_vep_args`, `argparse.bash`, `prepare_clinvar_bench.sh` | raw `--phase annotation`, the smoke test, the comparison harnesses |
+| Python | `vep_chromosome_jobs.py`, `vep_chromosome_cache.py`, `clinvar_gene_refresh.py`, `cache_resources.py` | `annotation_vcf.sh` and the installer |
+| `priva` commands | `alpha-annotation-base` (`motif.rs`, `profile.rs`, `publication.rs`; `header.rs` and `io.rs` stay, shared by other commands); `mapped-artifact --kind motifs` and `adopt-native`; `clinvar-gene-refresh` plan, install, deploy, retire-owned, retire-shards, acquire, file-date and the candidate phases (`profile.rs`, `refresh.rs`; download, check-header and due stay, with the refresh policy in `policy.rs`); `install-task run` and `call-args` (`run.rs`; adopt and publish moved to `publish.rs`) | the installer's functions |
+| Workflow and digest | `INSTALL_STEP` (`modules/local/install.nf`); the shell part of the step digest (installer functions, the lines outside them, `SCRIPT_DIR/NAME` and `DATA_DIR/PATH` names); raw `--phase annotation` in `priva task run` | no step since phase 6 |
+| Comparisons and fixtures | `rust/tests/alpha_annotation_base_compare.py`, `cache_resources_compare.py`, `clinvar_gene_refresh_compare.py`; `tests/fixtures/installer-054b494/`, `alpha_motif_command_09223ef.sh`, `gnomad_serial_e8_0029d817.sh`, `vep_serial_v7_5be1b946.sh` | the removed commands |
+
+The comparisons that run the old route (`tests/install_step_compare.py`,
+`tests/annotation_step_compare.py`, `tests/family_step_compare.py`) take it
+from a checkout of 841e200 (`--old-root`; `git worktree add OLD 841e200`);
+CI checks that commit out beside the source for the two analysis
+comparisons and removes it afterwards.
+
+Tests. Of the 1,799 Python tests of 841e200, 790 drove the deleted scripts
+(617 in 39 files that were removed whole, 173 in 24 files that keep their
+other tests); they are removed. Two checks found them: the tests that failed
+once the scripts were gone, and a second run with stand-ins at every removed
+path (a shell stand-in logs the running test and exits 197, and an audit hook
+logs every open of a removed path), which found 78 tests that still passed
+only because they expected a failure. The other 1,009 tests give the base
+run's results (the same 49 environmental failures in this sandbox, no new
+one).
+
+| Check | Result |
+| --- | --- |
+| `cargo test` | 829 passed, 0 failed (5 ignored) |
+| `tests/family_step_compare.py --old-root` 841e200 | 0 of 19 cases differ |
+| `tests/annotation_step_compare.py --old-root` 841e200 | 0 of 43 cases differ |
+| `rust/tests/mapped_artifact_compare.py` (PM1 kind) | 90 of 90 cases (the script's "motif/PM1" in one refusal read as the command's "PM1") |
+| `tests/install_workflow_check.py` | workflow generated from the registry, check passes |
+| Stub install twice on one resource folder | 84 step tasks, then none |
+| Analysis stub (`tests/nextflow/run_stub.sh`) | every case passed: annotation one task per step with cached resume, hub reuse, cohort and no-pedigree runs, phenotype bonus wiring, refusals |
+| `tests/nextflow/run_cadd_stub.sh` | `cadd.nf` wrote a CADD table that `main.nf` accepts |
+| CI's unittest selections | all 13 pass |
+
+Lineages. A step counts the Rust files its `priva` commands reach, so
+removing code from a file a step reaches gives it a new lineage, even where
+the commands it runs are unchanged. 33 of the 84 steps get one (51 keep
+theirs), and two of the five hub lineages:
+
+| Steps | Edited Rust files they reach |
+| --- | --- |
+| B3, C3 | `alpha_annotation_base` (`header.rs`, `io.rs`, `mod.rs`; motif, profile and publication removed) |
+| C11 | the same, and `mapped_artifact_publish` (motif kind and `adopt-native` removed) |
+| D0 | `alpha_annotation_base`, `clinvar_gene_refresh` (the refresh commands removed) and `spliceai_cache_input.rs` (functions only the installer called) |
+| D1 | those, `nextflow_task/tasks.rs` (raw `--phase annotation` removed) and `pipeline_steps/cadd.rs` (its messages name step E1) |
+| C4, D1_chr1 … D1_chrY, D1_chrOther | `nextflow_task/tasks.rs`, `pipeline_steps/cadd.rs` and `spliceai_cache_input.rs` |
+| B4 | `spliceai_cache_input.rs` |
+| D8 | `acmg_step/gene_mechanism_resources.rs` (its message names step F9) |
+
+| Hub | Lineage | Edited Rust file it reaches |
+| --- | --- | --- |
+| `vep` | dddb128a686dc85b to 3f4b5c7e5620d644 | `spliceai_cache_input.rs`, through `spliceai-cutoffs` |
+| `cadd` | 503d8fd8983b5214 to d3c9d54dec78067e | `pipeline_steps/cadd.rs` |
+
+Every step reaches `cli.rs`, but a step counts only its lines above the
+command table (`run`), and the removed `alpha-annotation-base` dispatch was in
+the table, so it changed no lineage. The `clinvar`, `gnomad` and `control`
+hubs keep their lineages. As no full installation through the steps exists
+yet, these new lineages rebuild nothing anyone has.
+
+Changes you can notice:
+
+- `README.md` describes only `nextflow run main.nf --action install`, and
+  exporting the installed environments with `priva installed-environment`;
+  `main_install`, `install_cluster.sh` and the `*.sbatch` scripts are gone.
+- `priva task run --phase annotation` in raw mode is refused ("Raw annotation
+  runs one step per task (annotation-preprocess to annotation-merge)");
+  annotated mode still imports the VCF.
+- Messages that named installer functions name the install step: CADD's
+  conda and `CADD.sh` (step E1, in `priva task step` and `cadd_conda.py`)
+  and the gene mechanism resources (step F9).
+- `example/smoke_test.py` runs `priva task step` (filtration, combine,
+  prioritization) and needs `PRIVA_BINARY` or `priva` on `PATH`, `yq`,
+  `bcftools` and `tabix`. Its bundled resources are Python pickles, which the
+  native readers refuse ("a Python pickle must first be converted with priva
+  cache-convert"); the run stops there, at splicing analysis, as it did on
+  841e200 with the shell scripts.
+- `priva cache-resources validate --check-routes` checks the inventory's
+  routes against the step IDs of `conf/install_steps.json`
+  (`cache_resources.json` names steps, not functions).
+- `priva install-task` refuses a source root without
+  `conf/install_steps.json` (it used to look for `scripts/install_utils.sh`).
+- `priva mapped-artifact` takes `--kind pm1` only, and its producer refusal
+  reads "Use the selected PM1 scientific producer".
+
 ### Phases 3 to 7
 
 | Phase | Scope | Shell glue now | Python it still runs | Work (tools keep their commands) |
@@ -1491,9 +1622,9 @@ Changes you can notice:
 | 4 | Pipeline scripts: `annotation_vcf.sh` (1,827 lines), `filtration_vcf_per_fam.sh` (356), `prioritization_vcf_per_fam.sh` (430), `common_bash_utils.sh` (1,627) | run inside every analysis task | an inline `python - <<PY` block in `anno_VEP_cache_worker`, and `cadd_conda.py` (finds CADD's conda) | The annotation, filtration and prioritization tasks already exist per step; each runs VEP, bcftools, `CADD.sh` and `priva` with their own command lines instead of a shell function. `priva task run` keeps the task's checks and runs them, since which commands run depends on the settings. Done (above) for filtration, the prioritization steps and the six annotation steps; the scripts stay for the installer and `--phase annotation` until phase 6 |
 | 5 | Steps on native builders: A5 (moved from phase 3), C6, C8, C10, C11, D6, D8, D9, F4 to F10 | 7 to 19 functions each | `protein_domain_mapping.py` (C8's rebuild) | Each a process; F4's acquisition is curl and `priva gene-mechanism prepared`. Done (above), except F5's rebuild, which needs A2's two VEP caches and moves to phase 6 (done there, part 6) |
 | 6 | Heavy chains: A2, B4, C1, C3, C4, D0 (moved from phase 3), D1, E1, and F5's rebuild. Done (above): C1_chr*, C1, D0, A2, B4, C3, C4, D1_split, D1_chr*, D1, E1 and F5's rebuild | 13 to 49 functions each | `cadd_scripts_install.py`, `cadd_prescore_index.py` (kept: they belong to CADD) | VEP, bcftools, CrossMap and `CADD.sh` command lines in the process; one change per step |
-| 7 | Remove the shell installer | `main_install`, `install_cluster.sh`, the `*.sbatch` scripts | | Delete `install_utils.sh` and the bash part of the digest |
+| 7 | Remove the shell installer and the shell glue | none | none of PriVA's own (`cadd_scripts_install.py` and `cadd_prescore_index.py` belong to CADD) | Done (above): `install_utils.sh`, the cluster scripts, the analysis scripts and the bash part of the digest deleted |
 
-All seven phases are finished and checked end to end on the migration branch before any of it goes to `main`.
+The seven phases are done on the migration branch. What remains before any of it goes to `main` is the end-to-end check: a full installation through the steps and a family run, compared with the existing installation.
 
 ## Retained Python tools
 

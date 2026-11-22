@@ -26,16 +26,6 @@ def module(name, filename):
 
 PATHS = module("resource_boundary_paths", "installer_config_paths.py")
 PREREQUISITES = module("resource_boundary_prerequisites", "installer_prerequisites.py")
-PRELUDE = r'''
-source "$1"
-BASE_DIR=$TEST_SOURCE_ROOT
-DATA_DIR=$TEST_SOURCE_ROOT/data
-log() { printf '%s\n' "$*" >&2; }
-read_yaml() { "$TEST_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2], ""))' "$1" "$2"; }
-update_yaml() { printf 'UPDATE:%s:%s\n' "$2" "$3" >> "$TEST_EVENTS"; }
-wget() { printf 'UNEXPECTED_NETWORK\n' >> "$TEST_EVENTS"; return 98; }
-python() { "$TEST_PYTHON" "$@"; }
-'''
 
 
 class InstallResourceBoundaries(unittest.TestCase):
@@ -68,11 +58,6 @@ class InstallResourceBoundaries(unittest.TestCase):
         PATHS.resolve_config(argparse.Namespace(config=self.config, source_root=self.source_root,
                                                managed_updates_json=None, check=False, output=None))
 
-    def shell(self, command, setup=""):
-        self.write()
-        return subprocess.run(["bash", "--noprofile", "--norc", "-c", PRELUDE + setup + "\n" + command,
-                               "test", str(ROOT / "scripts/install_utils.sh")],
-                              env=self.env, text=True, capture_output=True, timeout=45)
 
     def supplied_chain(self, name="hg38ToHg19.over.chain.gz"):
         source = self.folder / "manual" / name
@@ -137,68 +122,6 @@ class InstallResourceBoundaries(unittest.TestCase):
         self.assertEqual(self.config.read_bytes(), before)
         self.assertFalse(self.cache.exists())
 
-    def test_gnomad_liftover_receives_the_selected_absolute_chain(self):
-        source = self.supplied_chain()
-        self.settings["hg38_hg19_chain"] = str(source)
-        setup = r'''
-check_vcf_validity() { return 0; }
-gnomAD_liftover() { printf 'LIFT_CHAIN:%s\n' "$2" >> "$TEST_EVENTS"; }
-parallel() { return 0; }
-'''
-        result = self.shell('gnomAD_install "$TEST_CONFIG"', setup)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("LIFT_CHAIN:" + str(source), self.events.read_text())
-        self.assertNotIn("UNEXPECTED_NETWORK", self.events.read_text())
-
-    def test_missing_explicit_chain_stops_gnomad_before_resource_or_network_access(self):
-        self.settings["hg38_hg19_chain"] = str(self.folder / "missing.chain.gz")
-        result = self.shell('gnomAD_install "$TEST_CONFIG"',
-                            'check_vcf_validity() { printf "UNEXPECTED_RESOURCE\\n" >> "$TEST_EVENTS"; return 0; }')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(self.events.read_text(), "")
-        self.assertIn("no replacement selected", result.stderr)
-
-    def test_chain_resolver_uses_the_existing_bundle_default_without_content_validation(self):
-        result = self.shell('priva_reverse_chain_file "$TEST_CONFIG"')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), str(self.bundle))
-
-    @unittest.skipUnless(shutil.which("bgzip") and shutil.which("tabix"), "htslib tools required")
-    def test_splicevault_passes_explicit_chain_as_one_argument_and_preserves_its_bytes(self):
-        source = self.supplied_chain("selected reverse.chain.gz")
-        self.settings.update(hg38_hg19_chain=str(source), splicevault_url="https://fixtures.invalid/unused.tsv.gz")
-        folder = self.cache / "VEP_plugin_cache/SpliceVault"
-        folder.mkdir(parents=True)
-        with (folder / "SpliceVault_data_GRCh38.tsv.gz").open("wb") as output:
-            subprocess.run(["bgzip", "-c"], input=b"#chrom\tpos\nchr1\t1\n", stdout=output, check=True)
-        self.env["TEST_CHAIN"] = str(source)
-        self.env.update(fake_priva_binary.environment(self.folder))
-        setup = r'''
-python() {
-    if [[ "$1" == */SpliceVault_tsv_vcf_conversion.py ]]; then
-        shift
-        "$TEST_PYTHON" - "$@" <<'BOUNDARY_CONVERSION_PY'
-import os,sys
-from pathlib import Path
-args=sys.argv[1:]
-chain=args[args.index("--chain_file")+1]
-assert chain == os.environ["TEST_CHAIN"]
-Path(args[args.index("--output_tsv")+1]).write_text("#chrom\tpos\nchr1\t1\n")
-with open(os.environ["TEST_EVENTS"],"a") as output:output.write("SPLICE_CHAIN:"+chain+"\n")
-BOUNDARY_CONVERSION_PY
-    else "$TEST_PYTHON" "$@"; fi
-}
-export -f python
-sort() { command sort -k1,1V -k2,2n "${@: -1}"; }
-announce_remove_tmps() { return 0; }
-'''
-        result = self.shell('SpliceVault_install "$TEST_CONFIG" "$TEST_CACHE"', setup)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("SPLICE_CHAIN:" + str(source), self.events.read_text())
-        self.assertNotIn("UNEXPECTED_NETWORK", self.events.read_text())
-        self.assertEqual(source.read_bytes(), b"exact selected external chain; never substitute bundle")
-        conversion = fake_priva_binary.calls(self.env["PRIVA_FAKE_CALLS"])[0]
-        self.assertEqual(conversion[:1] + conversion[5:7], ["splicevault-convert", "--chain_file", str(source)])
 
     def test_repeat_path_syntax_is_rejected_before_config_or_cache_mutation(self):
         for value in (str(self.folder / "selected.bed.gz"), "../selected.bed.gz", "subdir/selected.bed.gz", "subdir\\selected.bed.gz", ".", ".."):

@@ -13,7 +13,7 @@
     "url_templates": "Discovery/documentation, not proof arbitrary versions exist or are compatible. Consult current installer/pin manifests.",
     "scientific_acceptance": "Resource deployment and refresh do not establish public/family or changed-profile qualification.",
     "credentials": "No credentials, access tokens or signed URLs belong in this map.",
-    "install_vs_refresh": "install_entrypoints records acquisition/reuse procedures; refresh.entrypoints records procedures to retain for maintained feeds/derived rebuilds. Fixed snapshots have no routine refresh function."
+    "install_vs_refresh": "install_entrypoints names the install steps (their IDs in conf/install_steps.json) that acquire, build or reuse the resource; refresh.entrypoints names the steps kept to refresh maintained feeds and derived rebuilds. Fixed snapshots have no routine refresh step. Bundled snapshots name no step: the install preflight checks them."
   },
   "resources": {
     "nextflow_runtime": {
@@ -42,10 +42,8 @@
         "entrypoints": []
       },
       "depends_on": [],
-      "notes": "Nextflow checkout only. main_install calls Nextflow_runtime_install, which installs or reuses checksum-pinned artifacts under cache_root/runtime/priva-nextflow-25.10.4. The bootstrap script owns the exact URL/SHA256 pins; this inventory does not select or upgrade versions. No scientific workflow is run by driver deployment.",
-      "install_entrypoints": [
-        "Nextflow_runtime_install"
-      ],
+      "notes": "Nextflow checkout only. scripts/bootstrap_nextflow_runtime.sh install --prefix PREFIX (the second bootstrap command before nextflow run main.nf --action install) installs or reuses checksum-pinned artifacts under PREFIX. The bootstrap script owns the exact URL/SHA256 pins; this inventory does not select or upgrade versions. No scientific workflow is run by driver deployment.",
+      "install_entrypoints": [],
       "maintenance_evidence": {
         "basis": "selected_pinned_installer_artifacts",
         "cadence": "explicit_revision_only",
@@ -76,8 +74,8 @@
       "depends_on": [],
       "notes": "Existing explicit reference identity wins. Original UCSC bigZips is not a substitute for a selected DRAGEN graph/analysis-set reference.",
       "install_entrypoints": [
-        "reference_genome_install",
-        "assembly_references_install"
+        "A1",
+        "F5"
       ],
       "maintenance_evidence": {
         "basis": "selected_artifact_and_existing_installer_route",
@@ -110,9 +108,9 @@
       "depends_on": [],
       "notes": "Retain original chain direction. The reverse chain reuses the genuine Git bundle or an explicitly supplied absolute source adopted beneath cache_root; no alternate chain is substituted.",
       "install_entrypoints": [
-        "gofcards_reference_install",
-        "gnomAD_install",
-        "SpliceVault_install"
+        "F5",
+        "C1",
+        "B5"
       ],
       "maintenance_evidence": {
         "basis": "selected_artifact_and_existing_installer_route",
@@ -139,7 +137,7 @@
         "automatic": false,
         "policy": "configured_vep_release",
         "entrypoints": [
-          "vep_cache_api_install"
+          "A2"
         ]
       },
       "depends_on": [
@@ -154,7 +152,7 @@
         ]
       },
       "install_entrypoints": [
-        "vep_cache_api_install"
+        "A2"
       ],
       "maintenance_evidence": {
         "basis": "publisher_versioned_release_documentation",
@@ -183,15 +181,15 @@
         "automatic": false,
         "policy": "configured_vep_release",
         "entrypoints": [
-          "vep_cache_api_install"
+          "A2"
         ]
       },
       "depends_on": [
         "vep_cache"
       ],
-      "notes": "Keep official upstream plugins and requested release; no Rust replacement. Official plugin source acquisition and release verification belong to vep_cache_api_install; VEP_plugins_install prepares the separate plugin resource caches.",
+      "notes": "Keep official upstream plugins and requested release; no Rust replacement. Official plugin source acquisition and release verification belong to step A2 (vep_install, then priva vep-plugins); the plugin resource caches are their own steps (B1 to B9).",
       "install_entrypoints": [
-        "vep_cache_api_install"
+        "A2"
       ],
       "maintenance_evidence": {
         "basis": "publisher_versioned_release_documentation",
@@ -222,7 +220,7 @@
         "automatic": false,
         "policy": "registered_assembly_vep_profile",
         "entrypoints": [
-          "nm_to_enst_mapping_install"
+          "A5"
         ]
       },
       "depends_on": [
@@ -230,7 +228,7 @@
       ],
       "notes": "Small pinned mapping versions remain in repository data/hgnc, including missing default destinations; raw acquisition uses an external BioMart workspace. Preserve explicitly selected external mappings and their provenance in place. Bundled reuse checks existence/nonzero only. GRCh37 mart116 retains base75 lineage. GRCh38 FTP116 is a distinct candidate; order/multiplicity preserved, scientific coordinate qualification separate.",
       "install_entrypoints": [
-        "nm_to_enst_mapping_install"
+        "A5"
       ],
       "maintenance_evidence": {
         "basis": "selected_artifact_and_existing_installer_route",
@@ -259,8 +257,8 @@
         "automatic": false,
         "policy": "clinvar_gene_age_policy",
         "entrypoints": [
-          "ClinVar_install",
-          "ClinVar_VCF_deploy"
+          "D0",
+          "D1"
         ]
       },
       "depends_on": [
@@ -286,8 +284,8 @@
         ]
       },
       "install_entrypoints": [
-        "ClinVar_install",
-        "ClinVar_VCF_deploy"
+        "D0",
+        "D1"
       ],
       "maintenance_evidence": {
         "basis": "publisher_documentation",
@@ -311,13 +309,13 @@
         "automatic": false,
         "policy": "on_clinvar_gene_rebuild",
         "entrypoints": [
-          "ClinVar_install"
+          "D0"
         ]
       },
       "depends_on": [],
       "notes": "Record publisher checksum and acquired identity independently; a local filename is not proof of release concordance with the VCF.",
       "install_entrypoints": [
-        "ClinVar_install"
+        "D0"
       ],
       "maintenance_evidence": {
         "basis": "publisher_documentation",
@@ -343,7 +341,7 @@
         "automatic": false,
         "policy": "pinned_version_on_rebuild",
         "entrypoints": [
-          "ClinVar_install"
+          "D0"
         ]
       },
       "depends_on": [],
@@ -352,7 +350,7 @@
         "version": "1.4"
       },
       "install_entrypoints": [
-        "ClinVar_install"
+        "D0"
       ],
       "maintenance_evidence": {
         "basis": "selected_artifact_and_existing_installer_route",
@@ -379,8 +377,7 @@
         "automatic": true,
         "policy": "latest_filedate_vs_bundled_mtime",
         "entrypoints": [
-          "ClinVar_install",
-          "ClinVar_Gene_stat_regenerate"
+          "D1"
         ],
         "threshold_months": 3,
         "comparison": "latest_fileDate >= add_calendar_months(UTC_date(bundled_mtime), threshold_months)",
@@ -394,8 +391,7 @@
       ],
       "notes": "User-authorized metadata-age exception: preserve bundled baseline; build a separate managed result and select its full path only on success. No bundled content/schema/checksum validation. On the Rust branch, installation converts the selected pickle into a full-value native archive under cache_root; this archive is not bundled in Git.",
       "install_entrypoints": [
-        "ClinVar_install",
-        "ClinVar_Gene_stat_regenerate"
+        "D1"
       ],
       "maintenance_evidence": {
         "basis": "selected_artifact_and_existing_installer_route",
@@ -430,8 +426,8 @@
         "automatic": false,
         "policy": "selected_inputs_change",
         "entrypoints": [
-          "ClinVar_AA_stat",
-          "ClinVar_patho_AF_stat"
+          "D1",
+          "D6"
         ]
       },
       "depends_on": [
@@ -440,8 +436,8 @@
       ],
       "notes": "Retain original processing/filter order; do not treat this inventory as a new automatic refresh scheduler. The Rust installer converts only the listed runtime cache keys to native archives after their builders succeed; source pickles and scientific companion receipts are retained.",
       "install_entrypoints": [
-        "ClinVar_AA_stat",
-        "ClinVar_patho_AF_stat"
+        "D1",
+        "D6"
       ],
       "maintenance_evidence": {
         "basis": "selected_artifact_and_existing_installer_route",
@@ -473,13 +469,13 @@
         "automatic": false,
         "policy": "existing_vcv_reuse_policy",
         "entrypoints": [
-          "gene_nonlof_mechanism_cache_install"
+          "F6"
         ]
       },
       "depends_on": [],
       "notes": "Existing caller policy and selected XML identity remain authoritative; records feed mechanism/GoFCards conditions.",
       "install_entrypoints": [
-        "gene_nonlof_mechanism_cache_install"
+        "F6"
       ],
       "maintenance_evidence": {
         "basis": "publisher_documentation",
@@ -506,8 +502,7 @@
         "automatic": false,
         "policy": "explicit_release_change",
         "entrypoints": [
-          "gnomAD_install",
-          "gnomAD_liftover"
+          "C1"
         ]
       },
       "depends_on": [
@@ -521,8 +516,7 @@
         "GRCh37": "original PriVA liftover"
       },
       "install_entrypoints": [
-        "gnomAD_install",
-        "gnomAD_liftover"
+        "C1"
       ],
       "maintenance_evidence": {
         "basis": "selected_artifact_and_existing_installer_route",
@@ -550,9 +544,9 @@
         "entrypoints": []
       },
       "depends_on": [],
-      "notes": "A stable URL is not evidence of a rolling latest service. Preserve selected original scores. External original files use AlphaMissense_install; they are not repository-bundled snapshots.",
+      "notes": "A stable URL is not evidence of a rolling latest service. Preserve selected original scores. External original files use step B3; they are not repository-bundled snapshots.",
       "install_entrypoints": [
-        "AlphaMissense_install"
+        "B3"
       ],
       "maintenance_evidence": {
         "basis": "fixed_selected_snapshot_policy",
@@ -587,11 +581,11 @@
         "automatic": false,
         "policy": "selected_inputs_change",
         "entrypoints": [
-          "AlphaMissense_anno",
-          "AlphaMissense_anno_gnomAD",
-          "AlphaMissense_stat",
-          "AlphaMissense_pick_intolerant_domains",
-          "prepare_pm1_regions"
+          "C3",
+          "C4",
+          "C6",
+          "C10",
+          "C11"
         ]
       },
       "depends_on": [
@@ -605,11 +599,11 @@
       ],
       "notes": "Original scientific operation and mutation order remain fixed within a profile. DAS intermediate metadata requires a completed association with the selected VCF, assembly and extraction source; unassociated or changed-source intermediates regenerate atomically from that input. The outer installer records successful multi-output publication separately. These engineering receipts do not qualify a scientific profile. The Rust installer converts only the listed runtime cache keys to native archives after their builders succeed; source pickles and scientific companion receipts are retained.",
       "install_entrypoints": [
-        "AlphaMissense_anno",
-        "AlphaMissense_anno_gnomAD",
-        "AlphaMissense_stat",
-        "AlphaMissense_pick_intolerant_domains",
-        "prepare_pm1_regions"
+        "C3",
+        "C4",
+        "C6",
+        "C10",
+        "C11"
       ],
       "maintenance_evidence": {
         "basis": "selected_artifact_and_existing_installer_route",
@@ -649,7 +643,7 @@
         "version": "v1"
       },
       "install_entrypoints": [
-        "SpliceAI_install"
+        "B4"
       ],
       "maintenance_evidence": {
         "basis": "fixed_selected_snapshot_policy",
@@ -685,8 +679,7 @@
         "version": "2.0"
       },
       "install_entrypoints": [
-        "SpliceAI_install",
-        "SpliceAI2_install"
+        "B4"
       ],
       "maintenance_evidence": {
         "basis": "fixed_selected_snapshot_policy",
@@ -719,7 +712,7 @@
         "version": "0.2"
       },
       "install_entrypoints": [
-        "PrimateAI_install"
+        "B7"
       ],
       "maintenance_evidence": {
         "basis": "fixed_selected_snapshot_policy",
@@ -752,7 +745,7 @@
       "depends_on": [],
       "notes": "GRCh38 release114 91-mammal candidate is separate from VEP116 and LoFTEE GERP; no silent92-mammal replacement.",
       "install_entrypoints": [
-        "Conservation_install"
+        "B2"
       ],
       "maintenance_evidence": {
         "basis": "selected_artifact_and_existing_installer_route",
@@ -775,7 +768,7 @@
         "kind": "assembly_pinned_urls",
         "documentation": "https://github.com/konradjk/loftee",
         "url_template": "https://personal.broadinstitute.org/konradk/loftee_data/{assembly}/{filename}",
-        "route_source": "scripts/install_utils.sh:LoFtee_install"
+        "route_source": "modules/local/install_steps/loftee.nf"
       },
       "refresh": {
         "keep_function": false,
@@ -788,7 +781,7 @@
       ],
       "notes": "Use assembly-specific exact objects from installer; GRCh37 ancestor uses the recorded bcbio source, so the generic template is not universal.",
       "install_entrypoints": [
-        "LoFtee_install"
+        "B8"
       ],
       "maintenance_evidence": {
         "basis": "selected_artifact_and_existing_installer_route",
@@ -817,9 +810,7 @@
       },
       "depends_on": [],
       "notes": "Existence/nonzero only for repository bundles.",
-      "install_entrypoints": [
-        "LOEUF_install"
-      ],
+      "install_entrypoints": [],
       "maintenance_evidence": {
         "basis": "fixed_selected_snapshot_policy",
         "cadence": "not_verified",
@@ -843,7 +834,7 @@
         "automatic": false,
         "policy": "explicit_profile_change",
         "entrypoints": [
-          "UTRAnnotator_install"
+          "B1"
         ]
       },
       "depends_on": [
@@ -851,7 +842,7 @@
       ],
       "notes": "Keep a deliberate source revision; installation is not a rolling-data freshness guarantee.",
       "install_entrypoints": [
-        "UTRAnnotator_install"
+        "B1"
       ],
       "maintenance_evidence": {
         "basis": "selected_artifact_and_existing_installer_route",
@@ -877,7 +868,7 @@
         "automatic": false,
         "policy": "explicit_source_refresh",
         "entrypoints": [
-          "SpliceVault_install"
+          "B5"
         ]
       },
       "depends_on": [
@@ -885,7 +876,7 @@
       ],
       "notes": "Record retrieved identity; hg19 retains original coordinate conversion, without claiming identical coverage.",
       "install_entrypoints": [
-        "SpliceVault_install"
+        "B5"
       ],
       "maintenance_evidence": {
         "basis": "selected_artifact_and_existing_installer_route",
@@ -913,7 +904,7 @@
         "automatic": false,
         "policy": "explicit_source_refresh",
         "entrypoints": [
-          "MaveDB_install"
+          "B6"
         ]
       },
       "depends_on": [],
@@ -923,7 +914,7 @@
         "GRCh38": "retained"
       },
       "install_entrypoints": [
-        "MaveDB_install"
+        "B6"
       ],
       "maintenance_evidence": {
         "basis": "selected_artifact_and_existing_installer_route",
@@ -943,7 +934,7 @@
       "bundled_paths": [],
       "source": {
         "kind": "fixed_snapshot_url",
-        "route_source": "scripts/common_bash_utils.sh:get_pext_base_url",
+        "route_source": "modules/local/install_steps/pext.nf",
         "documentation": "https://gnomad.broadinstitute.org/downloads"
       },
       "refresh": {
@@ -958,7 +949,7 @@
         "expression": "GTEx v10"
       },
       "install_entrypoints": [
-        "pext_install"
+        "B9"
       ],
       "maintenance_evidence": {
         "basis": "selected_artifact_and_existing_installer_route",
@@ -989,7 +980,7 @@
         "automatic": false,
         "policy": "configured_vep_release_preserve_explicit_identity",
         "entrypoints": [
-          "CDS_FASTA_install"
+          "A4"
         ]
       },
       "depends_on": [
@@ -997,7 +988,7 @@
       ],
       "notes": "Existing supplied FASTA identity wins. GRCh37 current URL retains historical annotation lineage; versioned route must be checked per assembly.",
       "install_entrypoints": [
-        "CDS_FASTA_install"
+        "A4"
       ],
       "maintenance_evidence": {
         "basis": "selected_artifact_and_existing_installer_route",
@@ -1026,16 +1017,16 @@
         "automatic": false,
         "policy": "coordinated_cadd_release",
         "entrypoints": [
-          "CADD_install"
+          "E1"
         ]
       },
       "depends_on": [],
-      "notes": "Keep same-publisher data/index pins. GRCh38 annotation bundle currently uses Berlin; individual prescores use Washington. Template alone must not mix source identities. CADD_install downloads each file only when missing (MD5 checked once), installs PriVA's copies of extract_scored.py and MMSplice.py (scripts/cadd_scripts) over the reviewed upstream bytes, and builds TABLE.posidx beside each prescored table (scripts/cadd_prescore_index.py); CADD_upstream_check builds CADD.sh's environments.",
+      "notes": "Keep same-publisher data/index pins. GRCh38 annotation bundle currently uses Berlin; individual prescores use Washington. Template alone must not mix source identities. Step E1 downloads each file into its own folder (MD5 checked), installs PriVA's copies of extract_scored.py and MMSplice.py (scripts/cadd_scripts) over the reviewed upstream bytes, builds TABLE.posidx beside each prescored table (scripts/cadd_prescore_index.py), and runs CADD.sh once on its test input, which builds CADD.sh's environments.",
       "selected_profile": {
         "data_version": "v1.7"
       },
       "install_entrypoints": [
-        "CADD_install"
+        "E1"
       ],
       "maintenance_evidence": {
         "basis": "selected_artifact_and_existing_installer_route",
@@ -1063,13 +1054,13 @@
         "automatic": false,
         "policy": "bundled_reuse_or_explicit_refresh",
         "entrypoints": [
-          "InterPro_parsing"
+          "C8"
         ]
       },
       "depends_on": [],
       "notes": "Upstream release stream is maintained; selected bundled mapping/curation remains a snapshot reused without content checks. The Rust workflow uses the bundled native archive or an installation-time conversion of the explicitly selected mapping; builders retain their original pickle input.",
       "install_entrypoints": [
-        "InterPro_parsing"
+        "C8"
       ],
       "maintenance_evidence": {
         "basis": "selected_artifact_and_existing_installer_route",
@@ -1104,13 +1095,13 @@
         "automatic": false,
         "policy": "bundled_reuse_or_existing_external_refresh",
         "entrypoints": [
-          "ClinGen_deploy"
+          "D9"
         ]
       },
       "depends_on": [],
       "notes": "Canonical bundled map/source is reused by existence/nonzero. Existing external-source precedence/refresh policy stays unchanged. Native hg19/hg38 maps are bundled beside the pickles; the Rust configuration selects the matching assembly archive after installation.",
       "install_entrypoints": [
-        "ClinGen_deploy"
+        "D9"
       ],
       "maintenance_evidence": {
         "basis": "selected_artifact_and_existing_installer_route",
@@ -1143,7 +1134,7 @@
         "automatic": false,
         "policy": "explicit_pinned_release_change",
         "entrypoints": [
-          "mondo_hpo_scope_install"
+          "F1"
         ]
       },
       "depends_on": [],
@@ -1152,7 +1143,7 @@
         "release": "v2026-06-23"
       },
       "install_entrypoints": [
-        "mondo_hpo_scope_install"
+        "F1"
       ],
       "maintenance_evidence": {
         "basis": "selected_artifact_and_existing_installer_route",
@@ -1183,7 +1174,7 @@
         "automatic": false,
         "policy": "explicit_pinned_release_change",
         "entrypoints": [
-          "mondo_hpo_scope_install"
+          "F1"
         ]
       },
       "depends_on": [
@@ -1194,7 +1185,7 @@
         "release": "v2026-07-06"
       },
       "install_entrypoints": [
-        "mondo_hpo_scope_install"
+        "F1"
       ],
       "maintenance_evidence": {
         "basis": "selected_artifact_and_existing_installer_route",
@@ -1225,15 +1216,17 @@
         "automatic": false,
         "policy": "existing_source_refresh_policy",
         "entrypoints": [
-          "gene_pathogenic_mechanism_cache_install",
-          "gene_nonlof_mechanism_cache_install"
+          "F4",
+          "F6",
+          "F8"
         ]
       },
       "depends_on": [],
       "notes": "Source availability and downstream evidence coverage must be recorded; no guessed replacement datasets.",
       "install_entrypoints": [
-        "gene_pathogenic_mechanism_cache_install",
-        "gene_nonlof_mechanism_cache_install"
+        "F4",
+        "F6",
+        "F8"
       ],
       "maintenance_evidence": {
         "basis": "selected_artifact_and_existing_installer_route",
@@ -1265,8 +1258,8 @@
         "automatic": false,
         "policy": "bundled_reuse_or_existing_external_refresh",
         "entrypoints": [
-          "gofcards_exact_gof_cache_install",
-          "gofcards_clinvar_injection_install"
+          "F5",
+          "F7"
         ]
       },
       "depends_on": [
@@ -1278,8 +1271,8 @@
       ],
       "notes": "Keep existing external 180-day rebuild/90-day reinjection configuration; these are days, unlike the new three-calendar-month gene-stat rule. This map does not enable a new scheduler.",
       "install_entrypoints": [
-        "gofcards_exact_gof_cache_install",
-        "gofcards_clinvar_injection_install"
+        "F5",
+        "F7"
       ],
       "maintenance_evidence": {
         "basis": "selected_artifact_and_existing_installer_route",
@@ -1312,9 +1305,9 @@
         "automatic": false,
         "policy": "bundled_reuse_or_explicit_rebuild",
         "entrypoints": [
-          "gene_pathogenic_mechanism_cache_install",
-          "gene_nonlof_mechanism_cache_install",
-          "hpo_condition_mechanism_cache_install"
+          "F4",
+          "F8",
+          "F9"
         ]
       },
       "depends_on": [
@@ -1328,9 +1321,9 @@
       ],
       "notes": "Reuse bundled snapshot when present; an upstream refresh does not authorize silently changing downstream scientific interpretation.",
       "install_entrypoints": [
-        "gene_pathogenic_mechanism_cache_install",
-        "gene_nonlof_mechanism_cache_install",
-        "hpo_condition_mechanism_cache_install"
+        "F4",
+        "F8",
+        "F9"
       ],
       "maintenance_evidence": {
         "basis": "selected_artifact_and_existing_installer_route",
@@ -1363,9 +1356,7 @@
       },
       "depends_on": [],
       "notes": "Fixed publication-derived inputs; no unverified latest URLs or replacement thresholds.",
-      "install_entrypoints": [
-        "bundled_snapshot_install"
-      ],
+      "install_entrypoints": [],
       "maintenance_evidence": {
         "basis": "fixed_selected_snapshot_policy",
         "cadence": "not_verified",
@@ -1402,9 +1393,7 @@
       },
       "depends_on": [],
       "notes": "HGNC upstream is maintained, but this bundled master snapshot has unknown publisher/Ensembl release and a content-hash versioned filename; its legacy filename is a compatibility link to the same bytes. It is separate from assembly/release-specific NM-to-ENST mappings. Curated rows require deliberate review, not unattended replacement.",
-      "install_entrypoints": [
-        "bundled_snapshot_install"
-      ],
+      "install_entrypoints": [],
       "maintenance_evidence": {
         "basis": "fixed_selected_snapshot_policy",
         "cadence": "not_verified",
@@ -1432,9 +1421,7 @@
       },
       "depends_on": [],
       "notes": "Use the selected assembly bundle; no upstream refresh route is currently qualified.",
-      "install_entrypoints": [
-        "bundled_snapshot_install"
-      ],
+      "install_entrypoints": [],
       "maintenance_evidence": {
         "basis": "fixed_selected_snapshot_policy",
         "cadence": "not_verified",
@@ -1460,9 +1447,7 @@
       },
       "depends_on": [],
       "notes": "Scientific interpretation policy is not a moving annotation resource.",
-      "install_entrypoints": [
-        "bundled_snapshot_install"
-      ],
+      "install_entrypoints": [],
       "maintenance_evidence": {
         "basis": "fixed_selected_snapshot_policy",
         "cadence": "not_verified",

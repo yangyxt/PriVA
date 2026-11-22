@@ -1,14 +1,14 @@
-//! `priva install-task`: runs the install steps of `conf/install_steps.json`
-//! as Nextflow tasks (`modules/local/install.nf`). It replaces
-//! `scripts/install_task.sh` with the same commands, files and lineages:
+//! `priva install-task`: the runner of the install steps of
+//! `conf/install_steps.json`, which run as Nextflow processes
+//! (`workflows/install.nf`, `modules/local/install.nf` and
+//! `modules/local/install_steps/`). It replaced `scripts/install_task.sh` with
+//! the same commands, files and lineages:
 //!
 //! ```text
 //! priva install-task plan    --registry R --config USER --out DIR --source-root CHECKOUT
 //!                            [--adopt-config OLD --adopt all|ID,ID] [--run ID,ID]
 //!                            [--pins PINS.json] [--refresh ID,ID] [--releases FILE]...
 //! priva install-task preflight --registry R --plan PLAN --source-root CHECKOUT [--stub]
-//! priva install-task run     --registry R --plan PLAN --step ID --lineage L --folder F
-//!                            --receipt FILE --source-root CHECKOUT [--input RECEIPT]... [--stub]
 //! priva install-task record  --registry R --plan PLAN --step ID --lineage L --folder F
 //!                            --receipt FILE --source-root CHECKOUT [--input RECEIPT]...
 //!                            [--key KEY=PATH]... [--stub]
@@ -34,36 +34,27 @@
 //! preflight: checks the files you supply for the steps that will run and
 //! the data files shipped in the checkout, before any step (see `preflight`).
 //!
-//! run: builds a private configuration whose `cache_root` is F/data, adds the
-//! keys of the input receipts, calls the step's installer functions unchanged
-//! (one `bash` that sources `scripts/install_utils.sh`), checks the output keys
-//! and writes the receipt. F/data is removed first if a failed attempt left it;
-//! Nextflow (storeDir) skips a step whose F holds a receipt. The finished folder
-//! is made read-only unless the step is writable.
-//!
-//! record: the receipt of a step that runs as its own Nextflow process
-//! (registry `module`): its script writes into the task's `data/` with the
-//! tools' own commands, and this checks the output keys and names them where
-//! storeDir moves them, F/data (see `record`).
+//! record: the receipt of a step (registry `module`): its process writes into
+//! the task's `data/` with the tools' own commands, and this checks the output
+//! keys and names them where storeDir moves them, F/data (see `record`).
+//! Nextflow (storeDir) skips a step whose F holds a receipt.
 //!
 //! adopt: writes a receipt naming the files of an existing installation.
 //!
-//! reach: lists the installer functions, script files and shipped data files a
-//! step's code digest covers, and the digest.
+//! reach: lists the module, script files, shipped data files, `priva`
+//! commands and Rust files a step's code digest covers, and the digest.
 //!
 //! value: prints one configuration value as the installer reads it (`yq -r
 //! '.[KEY] // empty | tostring'`).
 //!
-//! Lineage parity: the plan's digests, settings, file identities and release
-//! texts are the values the shell runner wrote, so every folder an earlier
-//! installation made is found again (see `digest` for the two places where that
-//! takes care).
+//! The plan's settings, file identities and release texts are the values the
+//! shell runner wrote; the digests are those of `digest`.
 mod content;
 mod digest;
 mod plan;
 mod preflight;
+mod publish;
 mod record;
-mod run;
 
 use crate::cli::{Result, invalid};
 use crate::json_text::{self, DumpsOptions, Json};
@@ -85,11 +76,9 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         "preflight" => preflight::preflight(&options),
         "release" => plan::release(&options),
         "reach" => digest::reach(&options),
-        "run" => run::run(&options),
         "record" => record::record(&options),
-        "adopt" => run::adopt(&options),
-        "publish" => run::publish(&options),
-        "call-args" => run::call_args(&options),
+        "adopt" => publish::adopt(&options),
+        "publish" => publish::publish(&options),
         "value" => {
             let config = options.path("config")?;
             let key = options.one("key")?;
@@ -106,12 +95,10 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
     }
 }
 
-const USAGE: &str = "usage: priva install-task plan|preflight|run|record|adopt|publish|release|reach|value [options]
+const USAGE: &str = "usage: priva install-task plan|preflight|record|adopt|publish|release|reach|value [options]
   plan    --registry R --config USER --out DIR --source-root CHECKOUT [--adopt-config OLD --adopt all|ID,ID]
           [--run ID,ID] [--pins PINS.json] [--refresh ID,ID] [--releases FILE]...
   preflight --registry R --plan PLAN --source-root CHECKOUT [--stub]
-  run     --registry R --plan PLAN --step ID --lineage L --folder F --receipt FILE --source-root CHECKOUT
-          [--input RECEIPT]... [--stub]
   record  --registry R --plan PLAN --step ID --lineage L --folder F --receipt FILE --source-root CHECKOUT
           [--input RECEIPT]... [--key KEY=PATH]... [--stub]
   adopt   --plan PLAN --step ID --lineage L --receipt FILE --source-root CHECKOUT
@@ -176,13 +163,13 @@ impl Options {
         self.values.get(name).map(Vec::as_slice).unwrap_or(&[])
     }
 
-    /// The checkout the installer runs from: its `scripts` folder holds the
-    /// installer functions, `data` the shipped files.
+    /// The checkout the steps run from: `conf/install_steps.json` is the
+    /// step registry, `modules` their processes, `data` the shipped files.
     pub(crate) fn source_root(&self) -> Result<PathBuf> {
         let root = self.path("source-root")?;
-        if !root.join("scripts").join("install_utils.sh").is_file() {
+        if !root.join("conf").join("install_steps.json").is_file() {
             return Err(invalid(format!(
-                "install-task: {} is not a PriVA checkout (no scripts/install_utils.sh)",
+                "install-task: {} is not a PriVA checkout (no conf/install_steps.json)",
                 root.display()
             )));
         }
@@ -593,33 +580,6 @@ pub(crate) fn set_writable(path: &Path, writable: bool) {
         }
     }
     apply(path, writable, true);
-}
-
-/// `cp -p`: content, mode and times.
-pub(crate) fn copy_preserving(from: &Path, to: &Path) -> Result<()> {
-    std::fs::copy(from, to).map_err(|e| {
-        fail(format!(
-            "cannot copy {} to {}: {e}",
-            from.display(),
-            to.display()
-        ))
-    })?;
-    let meta = std::fs::metadata(from).map_err(|e| fail(format!("{}: {e}", from.display())))?;
-    let times = [
-        libc::timespec {
-            tv_sec: meta.atime(),
-            tv_nsec: meta.atime_nsec(),
-        },
-        libc::timespec {
-            tv_sec: meta.mtime(),
-            tv_nsec: meta.mtime_nsec(),
-        },
-    ];
-    let target = std::ffi::CString::new(to.as_os_str().as_encoded_bytes())
-        .map_err(|_| fail(format!("{} holds a NUL", to.display())))?;
-    // SAFETY: `target` is a valid C string and `times` holds two timespecs.
-    unsafe { libc::utimensat(libc::AT_FDCWD, target.as_ptr(), times.as_ptr(), 0) };
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------

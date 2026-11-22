@@ -17,7 +17,6 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
-INSTALLER = ROOT / "scripts/install_utils.sh"
 HELPER = ROOT / "scripts/installer_config_paths.py"
 SPEC = importlib.util.spec_from_file_location("installer_config_paths", HELPER)
 PATHS = importlib.util.module_from_spec(SPEC)
@@ -47,18 +46,6 @@ class PortableConfigPaths(unittest.TestCase):
         return subprocess.run([sys.executable, str(HELPER), "resolve", "--config", str(self.config),
                                "--source-root", str(ROOT), *extra], text=True, capture_output=True, timeout=15)
 
-    def run_shell(self, body):
-        script = (
-            'source "$1" >/dev/null || exit\n'
-            '# Native publication has dedicated private-view fixtures.\n'
-            'priva_cache_install_begin() { PRIVA_CACHE_INSTALL_BUILD_CONFIG=$2; }\n'
-            'priva_cache_install_finish() { return 0; }\n'
-        ) + body
-        # The installer's configuration steps run through priva; the fixture runs the scripts.
-        return subprocess.run(["bash", "--noprofile", "--norc", "-c", script,
-                               "test", str(INSTALLER), str(self.config)],
-                              env=dict(os.environ, **fake_priva_binary.environment(self.folder)),
-                              text=True, capture_output=True, timeout=20)
 
     def test_template_has_no_host_paths_and_only_run_inputs_are_unset(self):
         text = (ROOT / "config.yaml").read_text()
@@ -71,144 +58,6 @@ class PortableConfigPaths(unittest.TestCase):
         self.assertIsNone(config["nm_to_enst_tsv"])
         self.assertIn("not for installation", text)
 
-    def test_blank_basic_paths_stop_before_manager_or_any_config_mutation(self):
-        self.write_config(dict(self.basic, cache_root="", tmp_dir=""))
-        before = self.config.read_bytes()
-        result = self.run_shell('''
-            conda_install_vep() { printf 'UNEXPECTED_MANAGER\n'; return 99; }
-            main_install "$2"
-        ''')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("set cache_root", result.stderr)
-        self.assertIn("set tmp_dir", result.stderr)
-        self.assertNotIn("UNEXPECTED", result.stdout)
-        self.assertEqual(self.config.read_bytes(), before)
-        self.assertFalse(self.scratch.exists())
-
-    def test_required_basic_gate_rejects_invalid_storage_assembly_and_release(self):
-        self.cache.mkdir()
-        self.scratch.mkdir()
-        for change, diagnostic in (
-                ({"cache_root": "/"}, "set cache_root to an absolute, dedicated storage directory"),
-                ({"tmp_dir": "relative/tmp"}, "set tmp_dir to an absolute, dedicated storage directory"),
-                ({"cache_root": str(self.folder / "unsafe space")}, "without spaces or shell characters"),
-                ({"assembly": "unknown"}, "set assembly"),
-                ({"vep_installed_version": "116.3"}, "set vep_installed_version")):
-            with self.subTest(change=change):
-                self.write_config(dict(self.basic, **change))
-                before = self.config.read_bytes()
-                result = self.run_shell('priva_install_basic_paths --config "$2"')
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(diagnostic, result.stderr)
-                self.assertEqual(self.config.read_bytes(), before)
-                self.assertEqual(list(self.cache.iterdir()), [])
-                self.assertEqual(list(self.scratch.iterdir()), [])
-
-    def test_missing_or_nondirectory_storage_stops_before_environment_or_config_changes(self):
-        for state in ("missing", "regular_file", "broken_symlink"):
-            for invalid_keys in (("cache_root",), ("tmp_dir",), ("cache_root", "tmp_dir")):
-                for entry_point in ("priva_install_basic_paths --config", "main_install"):
-                    with self.subTest(state=state, invalid_keys=invalid_keys, entry_point=entry_point):
-                        case = self.folder / (state + "_" + "_".join(invalid_keys) + "_" + entry_point.split()[0])
-                        case.mkdir()
-                        paths = {key: case / key / "selected" for key in ("cache_root", "tmp_dir")}
-                        for key, path in paths.items():
-                            if key not in invalid_keys:
-                                path.mkdir(parents=True)
-                            elif state == "regular_file":
-                                path.parent.mkdir()
-                                path.write_bytes(b"selected path is an existing file\n")
-                            elif state == "broken_symlink":
-                                path.parent.mkdir()
-                                path.symlink_to(path.parent / "missing_target", target_is_directory=True)
-                        self.write_config(dict(self.basic, **{key: str(path) for key, path in paths.items()}))
-                        before = self.config.read_bytes()
-                        entries = sorted(str(path.relative_to(case)) for path in case.rglob("*"))
-                        result = self.run_shell('''
-                            conda_install_vep() { printf 'UNEXPECTED_MANAGER\n'; return 91; }
-                            priva_prepare_install_config() { printf 'UNEXPECTED_CONFIG_PREPARATION\n'; return 92; }
-                            priva_configure_cache_paths() { printf 'UNEXPECTED_CACHE_PREPARATION\n'; return 93; }
-                            priva_configure_portable_paths() { printf 'UNEXPECTED_CONFIG_WRITE\n'; return 94; }
-                            reference_genome_install() { printf 'UNEXPECTED_RESOURCE\n'; return 95; }
-                            wget() { printf 'UNEXPECTED_DOWNLOAD\n'; return 96; }
-                            curl() { printf 'UNEXPECTED_DOWNLOAD\n'; return 96; }
-                        ''' + '\n' + entry_point + ' "$2"')
-                        self.assertNotEqual(result.returncode, 0)
-                        for key in paths:
-                            diagnostic = f"{key} must be an existing directory"
-                            if key in invalid_keys:
-                                self.assertIn(diagnostic, result.stderr)
-                            else:
-                                self.assertNotIn(diagnostic, result.stderr)
-                        self.assertNotIn("UNEXPECTED", result.stdout + result.stderr)
-                        self.assertEqual(self.config.read_bytes(), before)
-                        self.assertEqual(sorted(str(path.relative_to(case)) for path in case.rglob("*")), entries)
-                        for key in invalid_keys:
-                            path = paths[key]
-                            if state == "regular_file":
-                                self.assertEqual(path.read_bytes(), b"selected path is an existing file\n")
-                            elif state == "broken_symlink":
-                                self.assertTrue(path.is_symlink())
-                                self.assertEqual(path.readlink(), path.parent / "missing_target")
-                                self.assertFalse(path.exists())
-                            else:
-                                self.assertFalse(path.parent.exists())
-
-    def test_basic_gate_needs_no_yaml_environment_and_preserves_selected_temp(self):
-        self.cache.mkdir()
-        self.scratch.mkdir()
-        self.write_config()
-        before = self.config.read_bytes()
-        result = self.run_shell('''
-            python() { printf 'UNEXPECTED_PYTHON\n'; return 99; }
-            yq() { printf 'UNEXPECTED_YQ\n'; return 99; }
-            priva_install_basic_paths --config "$2" || exit
-            printf '%s\n' "$PRIVA_INSTALL_TMPDIR"
-        ''')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), str(self.scratch))
-        self.assertEqual(self.config.read_bytes(), before)
-        self.assertEqual(list(self.cache.iterdir()), [])
-        self.assertEqual(list(self.scratch.iterdir()), [])
-
-    def test_existing_directory_symlinks_pass_basic_gate_without_rewriting_paths(self):
-        actual_cache = self.folder / "actual_cache"
-        actual_tmp = self.folder / "actual_tmp"
-        actual_cache.mkdir()
-        actual_tmp.mkdir()
-        self.cache.symlink_to(actual_cache, target_is_directory=True)
-        self.scratch.symlink_to(actual_tmp, target_is_directory=True)
-        self.write_config()
-        before = self.config.read_bytes()
-        result = self.run_shell('''
-            priva_install_basic_paths --config "$2" || exit
-            printf '%s\n' "$PRIVA_INSTALL_TMPDIR"
-        ''')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), str(self.scratch))
-        self.assertEqual(self.config.read_bytes(), before)
-        self.assertTrue(self.cache.is_symlink())
-        self.assertTrue(self.scratch.is_symlink())
-        self.assertEqual(list(actual_cache.iterdir()), [])
-        self.assertEqual(list(actual_tmp.iterdir()), [])
-
-    def test_main_reaches_environment_with_existing_storage_without_mkdir(self):
-        self.cache.mkdir()
-        self.scratch.mkdir()
-        self.write_config()
-        before = self.config.read_bytes()
-        result = self.run_shell('''
-            mkdir() { printf 'UNEXPECTED_DIRECTORY_CREATION\n'; return 99; }
-            conda_install_vep() { printf 'ENVIRONMENT_REACHED %s\n' "$TMPDIR"; return 73; }
-            priva_prepare_install_config() { printf 'UNEXPECTED_CONFIG_PREPARATION\n'; return 99; }
-            main_install "$2"
-        ''')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("ENVIRONMENT_REACHED " + str(self.scratch), result.stdout)
-        self.assertNotIn("UNEXPECTED", result.stdout + result.stderr)
-        self.assertEqual(self.config.read_bytes(), before)
-        self.assertEqual(list(self.cache.iterdir()), [])
-        self.assertEqual(list(self.scratch.iterdir()), [])
 
     def test_minimal_config_plans_both_assemblies_and_aliases(self):
         for assembly, ucsc, genome in (("hg19", "hg19", "GRCh37"), ("GRCh37", "hg19", "GRCh37"),
@@ -347,27 +196,6 @@ class PortableConfigPaths(unittest.TestCase):
                          str(self.cache / "InterPro/Interpro_entry_mapping.pkl.gz"))
         self.assertEqual(external.read_bytes(), b"supplied bytes")
 
-    def test_bundled_interpro_needs_only_nonzero_file_without_xml_or_decode(self):
-        source = self.folder / "checkout"
-        bundled = source / "data/InterPro/Interpro_entry_mapping.pkl.gz"
-        bundled.parent.mkdir(parents=True)
-        bundled.write_bytes(b"existence policy fixture, deliberately not a pickle")
-        self.write_config()
-        result = self.run_shell('''
-            DATA_DIR="$(dirname "$2")/checkout/data"
-            read_yaml() { [[ $2 != interpro_mapping_pickle ]] || printf 'Interpro_entry_mapping.pkl.gz\n'; }
-            update_yaml() { printf 'REGISTER %s\n' "$3"; }
-            update_or_append_yaml() { update_yaml "$@"; }
-            wget() { printf 'UNEXPECTED_DOWNLOAD\n'; return 99; }
-            gzip() { printf 'UNEXPECTED_CONTENT_CHECK\n'; return 99; }
-            python() { printf 'UNEXPECTED_DECODE\n'; return 99; }
-            InterPro_parsing "$2"
-        ''')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("REGISTER " + str(bundled), result.stdout)
-        self.assertNotIn("UNEXPECTED", result.stdout)
-        self.assertEqual(bundled.read_bytes(), b"existence policy fixture, deliberately not a pickle")
-        self.assertEqual(sorted(p.name for p in bundled.parent.iterdir()), [bundled.name])
 
     def test_known_bundled_clinvar_uses_size_policy_but_external_symlink_stays_strict(self):
         spec = importlib.util.spec_from_file_location("portable_bundle_prerequisites", ROOT / "scripts/installer_prerequisites.py")
@@ -385,43 +213,6 @@ class PortableConfigPaths(unittest.TestCase):
         bundled.symlink_to(external)
         with self.assertRaisesRegex(ValueError, "Cannot reuse bundled ClinVar"):
             prereqs.validate_selected_clinvar_stats({}, source)
-
-    def test_main_uses_effective_destinations_but_keeps_source_config_on_custom_failure(self):
-        self.cache.mkdir()
-        self.scratch.mkdir()
-        self.write_config(dict(self.basic, hpo_assertions=str(self.folder / "explicit.hpo.gz")))
-        before = self.config.read_bytes()
-        result = self.run_shell('''
-            conda_install_vep() { PRIVA_INSTALL_ENV_NAME=priva_acmg; }
-            priva_cache_install_begin() { PRIVA_CACHE_INSTALL_BUILD_CONFIG=$2; }
-            priva_cache_install_finish() { return 0; }
-            # Labelled boundary stub: this fixture tests the effective config
-            # and custom prerequisite failure; real manual-input gating has
-            # separate fresh/recovery integration coverage.
-            priva_manual_cache_inputs() { return 0; }
-            priva_configure_cache_paths() {
-                [[ ${2:-} == --check ]] || { printf 'UNEXPECTED_CACHE_WRITE\n'; return 97; }
-                printf '{}\n'
-            }
-            priva_install_prerequisites() {
-                python - "$1" <<'PY'
-import sys,yaml
-from pathlib import Path
-c=yaml.safe_load(Path(sys.argv[1]).read_text())
-print('EFFECTIVE',c['gofcards_workdir'],c['hpo_assertions'],c['gofcards_builder_script'])
-PY
-                return 73
-            }
-            nm_to_enst_mapping_install() { printf 'UNEXPECTED_MAPPING\n'; return 99; }
-            main_install "$2"
-        ''')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("EFFECTIVE " + str(self.cache / "gofcards/build_work"), result.stdout)
-        self.assertIn(str(self.cache / "hpo/supplied/hpo_assertions/explicit.hpo.gz"), result.stdout)
-        self.assertIn(str(ROOT / "scripts/build_gofcards_exact_gof_cache.py"), result.stdout)
-        self.assertNotIn("UNEXPECTED", result.stdout)
-        self.assertEqual(self.config.read_bytes(), before)
-        self.assertFalse(list(self.scratch.iterdir()))
 
 
 if __name__ == "__main__":

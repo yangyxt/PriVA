@@ -106,15 +106,6 @@ impl<'a> Value<'a> {
     pub(super) fn json(self) -> Result<Json> {
         json_text::parse(self.0, false).map_err(failure)
     }
-    pub(super) fn truth(self) -> bool {
-        match self.0.as_bytes().first() {
-            Some(b'n' | b'f') => false,
-            Some(b'"') => self.0 != "\"\"",
-            Some(b'{' | b'[') => !self.0[1..self.0.len() - 1].trim().is_empty(),
-            Some(b't') => true,
-            _ => number(self.0).is_none_or(|n| n != 0.0),
-        }
-    }
     pub(super) fn positive(self) -> Result<bool> {
         match self.kind() {
             "int" => Ok(!self.0.starts_with('-') && self.0.bytes().any(|b| b != b'0')),
@@ -224,7 +215,7 @@ mod tests {
         let raw = r#" {"selected":1,"ignored":{"wide":1461501637330902918203684832716283019655932542976,"text":"\ud800"}} "#;
         let value = Value::validate(raw).unwrap();
         assert!(value.get("selected").unwrap().equal(&Json::Int(1)).unwrap());
-        assert!(value.get("ignored").unwrap().truth());
+        assert_eq!(value.get("ignored").unwrap().kind(), "dict");
         assert!(Value::validate(r#"{"selected":1,"ignored":[1,]}"#).is_err());
     }
 }

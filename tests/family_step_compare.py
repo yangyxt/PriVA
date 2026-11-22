@@ -5,7 +5,9 @@ Old: the shell functions the analysis tasks ran before phase 4, as they ran
 them: `scripts/filtration_vcf_per_fam.sh` for filtration,
 `scripts/prioritization_vcf_per_fam.sh` for the whole prioritization, and the
 task's step wrapper (tests/fixtures/family-steps-952811c/prioritization_step.sh)
-for one prioritization step. New: `priva task step`, the Rust steps
+for one prioritization step. Phase 7 removed the scripts, so the old route
+takes them from a checkout of commit 841e200 (--old-root, for example
+`git worktree add OLD 841e200`). New: `priva task step`, the Rust steps
 `priva task run` calls now.
 
 The test family is data/test_example/TEST_FAM.filtered.vcf.gz with a made-up
@@ -24,7 +26,7 @@ out) and the same bytes of every other file but an index. Exit 1 on any
 difference.
 
   python3 tests/family_step_compare.py --priva rust/target/release/priva \\
-      --work W [--case NAME]...
+      --old-root OLD --work W [--case NAME]...
 """
 import argparse
 import gzip
@@ -128,13 +130,13 @@ def build_family(work: Path) -> dict:
     return info
 
 
-def checkout(work: Path) -> Path:
-    """A checkout with copied scripts (they find data/ by their real place)
-    and a data/ folder holding the files the ACMG step names."""
+def checkout(work: Path, old_root: Path) -> Path:
+    """A checkout with the old route's scripts (they find data/ by their real
+    place) and a data/ folder holding the files the ACMG step names."""
     root = work / "checkout"
     if root.exists():
         return root
-    shutil.copytree(ROOT / "scripts", root / "scripts")
+    shutil.copytree(old_root / "scripts", root / "scripts")
     for relative in ["alphamissense/alphamissense_mean_score.tsv", "repeats/repeats.bed.gz",
                      "MaveDB/assay_mapping_result.neutral_bands.tsv",
                      "ClinVar/clinvar_gene_stat.pkl",
@@ -321,8 +323,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--priva", required=True)
     parser.add_argument("--work", required=True)
+    parser.add_argument("--old-root", required=True)
     parser.add_argument("--case", action="append")
     args = parser.parse_args()
+    old_root = Path(args.old_root).resolve()
+    if not (old_root / "scripts" / "filtration_vcf_per_fam.sh").is_file():
+        parser.error(f"--old-root {old_root} has no scripts/filtration_vcf_per_fam.sh (check out 841e200)")
     work = Path(args.work).resolve()
     work.mkdir(parents=True, exist_ok=True)
     priva = str(Path(args.priva).resolve())
@@ -330,7 +336,7 @@ def main() -> int:
     stand_in.write_text(FAKE_PRIVA)
     stand_in.chmod(stand_in.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     family = build_family(work)
-    root = checkout(work)
+    root = checkout(work, old_root)
     config = base_config(work, family)
     all_cases = cases(family)
     failed = 0

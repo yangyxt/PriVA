@@ -1,7 +1,7 @@
 //! `priva cds-fasta validate --fasta FASTA --assembly ASSEMBLY`: the structure
 //! check of an Ensembl CDS FASTA, which `CDS_FASTA_install` ran as an inline
-//! Python block (`validate_cds_fasta` in `install_utils.sh` before this
-//! command). It reads the file as `AlternativeStartCodonDetector` does, plain
+//! Python block (`validate_cds_fasta` in the removed `install_utils.sh`
+//! before this command). It reads the file as `AlternativeStartCodonDetector` does, plain
 //! or gzip by the `.gz` name, and checks only that:
 //!
 //! - the first non-blank line is a header (`>` and some text after it);

@@ -13,9 +13,9 @@
 //! refresh, the workspace and its scientific profile) are left out: the step
 //! writes into its own folder, and its lineage stands for what it was built
 //! from.
-use super::profile::resource_policy;
-use super::refresh::{baseline_metadata, clinvar_stats_path};
+use super::policy::resource_policy;
 use super::*;
+use crate::installer_prerequisites::paths::{exists, is_file};
 use crate::python_path::absolute;
 
 pub(super) fn due(config_path: &str, source_root: &str) -> Result<Json> {
@@ -80,4 +80,42 @@ pub(super) fn due(config_path: &str, source_root: &str) -> Result<Json> {
         format!("latest ClinVar data date reaches the {months}-calendar-month boundary")
     };
     Ok(decision("rebuild", reason, file_date))
+}
+
+/// `clinvar_stats_path(config, source_root)` of installer_prerequisites.py.
+fn clinvar_stats_path(config: &Json, source_root: &str) -> Result<String> {
+    let configured = get_or_null(config, "clinvar_gene_stat")?;
+    let selected = if truth(&configured) {
+        py_str(&configured)
+    } else {
+        "clinvar_2star_stats.pkl.gz".to_owned()
+    };
+    let path = pathlib(&selected);
+    Ok(if path.starts_with('/') || selected.contains('/') {
+        path
+    } else {
+        join(&join(source_root, "data/ClinVar"), &path)
+    })
+}
+
+/// `baseline_metadata(path)`: existence, size and mtime only.
+fn baseline_metadata(path: &str) -> Result<Json> {
+    let present = exists(path)?;
+    let mut value = object([("path", string(path)), ("exists", Json::Bool(present))]);
+    if !present {
+        return Ok(value);
+    }
+    require(
+        is_file(path)?,
+        format!("Bundled ClinVar gene statistics is not a file: {path}"),
+    )?;
+    let info = stat(path)?;
+    let (seconds, micros) = float_timestamp(info.mtime(), info.mtime_nsec());
+    value.set("size", Json::Int(info.len() as i128));
+    value.set(
+        "mtime_ns",
+        Json::Int(nanoseconds(info.mtime(), info.mtime_nsec())),
+    );
+    value.set("mtime_utc", string(utc_text(seconds, micros)));
+    Ok(value)
 }

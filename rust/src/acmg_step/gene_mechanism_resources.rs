@@ -380,7 +380,7 @@ impl GeneMechanismHub {
             return Err(python_error(
                 "FileNotFoundError",
                 format!(
-                    "Integrated HPO condition-mechanism cache not found: {shown}. Run `bash scripts/install_utils.sh hpo_condition_mechanism_cache_install config.yaml`."
+                    "Integrated HPO condition-mechanism cache not found: {shown}. Build it with install step F9 (`nextflow run main.nf --action install`)."
                 ),
             ));
         }

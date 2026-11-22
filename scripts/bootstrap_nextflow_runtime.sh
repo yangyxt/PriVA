@@ -72,7 +72,7 @@ LAUNCHER
 verify_jre() {
     # Compare extracted bytes/links with the checksum-verified tar: version text
     # alone cannot identify an altered JVM/library. Python3 is supplied by the
-    # Conda prerequisite used by main_install; no third-party modules are used.
+    # Conda prerequisite used by the install; no third-party modules are used.
     python3 - "$1" "$java_directory" <<'PY'
 import hashlib
 import os

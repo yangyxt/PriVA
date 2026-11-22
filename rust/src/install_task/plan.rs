@@ -1,5 +1,5 @@
 //! `plan` and `release`.
-use super::digest::Installer;
+use super::digest::StepCode;
 use super::{
     Options, Result, absolute, delete_key, fail, identity, object, output_of, pretty, read_json,
     step, steps, string, strings, today_utc, truthy, write_file, yaml_keys, yaml_value,
@@ -148,7 +148,7 @@ pub(crate) fn plan(options: &Options) -> Result<()> {
     std::fs::create_dir_all(&out)
         .map_err(|e| fail(format!("cannot create {}: {e}", out.display())))?;
     let out = absolute(&out);
-    let installer = Installer::load(&root)?;
+    let code = StepCode::load(&root);
 
     // Keys a step writes, and folder keys, are removed so each step resolves
     // its own destinations under its own cache_root; files you supply stay.
@@ -191,7 +191,7 @@ pub(crate) fn plan(options: &Options) -> Result<()> {
     let mut planned: Vec<(String, Json)> = Vec::new();
     for entry in steps(&registry)? {
         let id = super::text(entry, "id");
-        let digest = installer
+        let digest = code
             .digest(entry)
             .map_err(|e| fail(format!("digest of {id} failed: {e}")))?;
         let mut settings: Vec<(String, Json)> = Vec::new();

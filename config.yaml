@@ -1,15 +1,15 @@
 # config.yaml
 # First install: create cache_root and tmp_dir directories on this host, then set their absolute paths,
 # then select assembly and the requested VEP major. No workflow inputs are needed yet.
-# Empty managed resource keys below are filled by main_install. Explicit input identities are
-# preserved; external caches are adopted beneath cache_root before managed paths are saved.
+# Empty managed resource keys below are filled by the installation (nextflow run main.nf --action install),
+# in the configuration it publishes. Explicit input identities are preserved.
 
-####################################################Prepare these paths before running the install_utils.sh script####################################################
+####################################################Prepare these paths before running the installation####################################################
 tmp_dir: ""
-assembly: hg19   # Change this you need to re-run the install_utils.sh script
+assembly: hg19   # If you change this, run the installation again
 ref_genome: ""  # Optional existing indexed assembly-correct FASTA; empty uses managed UCSC acquisition.
-conda_env_yaml: "acmg_conda_rough.yml"  # main_install uses this bundled environment definition.
-conda_env_name: "priva_acmg"   # main_install prepares the fixed priva_acmg environment.
+conda_env_yaml: "acmg_conda_rough.yml"  # The bundled environment definition the README creates priva_acmg from.
+conda_env_name: "priva_acmg"   # The fixed name of that environment.
 hg38_hg19_chain: "hg38ToHg19.over.chain.gz"   # Included in the GitHub repo, not recommend to change
 
 # Required data/cache storage root, also used for generated HPO/mechanism resources.
@@ -25,7 +25,7 @@ cache_folders:
   clinvar: ClinVar
   cadd: CADD
 
-# Resolved directory paths: maintained by install_utils.sh; do not edit these
+# Resolved directory paths: maintained by the installation; do not edit these
 # when cache_root is set. Saved resource paths beneath them follow root/name changes.
 gnomad_vcf_dir: ""  # The directory to store the gnomAD related annotation resources
 clinvar_vcf_dir: ""  # The directory to store the ClinVar related annotation resources
@@ -34,7 +34,7 @@ vep_cache_dir: ""  # the cache directory for VEP
 vep_plugins_dir: ""  # the directory containing the VEP plugins executable files
 vep_plugins_cachedir: ""   # the directory for storing the VEP plugin caches
 cadd_parent_dir: ""  # The parent directory to store the CADD scripts and cache files
-####################################################Ready to RUN install_utils.sh script####################################################
+####################################################Ready to RUN the installation####################################################
 
 
 ####################################################Prepare these paths before running PriVA workflow####################################################
@@ -62,8 +62,8 @@ pp1_ped: ""      # PED file for the PP1 cohort VCF file, optional
 ####################################################You can adjust above argument values for each cohort####################################################
 
 
-####################################################Below paths will be determined automatically by install_utils.sh####################################################
-# The compiled PriVA program (priva) that runs the converted pipeline steps; saved by main_install (PriVA_rust_install)
+####################################################Below paths will be determined automatically by the installation####################################################
+# The compiled PriVA program (priva) that runs the pipeline steps; built by scripts/bootstrap_priva_rust.py and saved by the installation
 priva_binary: ""
 # Below we specify the path to the gnomAD vcf file for chromosome X and we'll use that template to deduce the paths to other chromosome VCF files, the paths should be relatively constant
 gnomad_vcf_chrX: ""
@@ -74,7 +74,7 @@ clinvar_aa_stat: ""
 clinvar_splice_stat: ""
 clinvar_patho_af_stat: ""
 clinvar_patho_exon_af_stat: ""
-clinvar_pm5_index: ""  # Built by install_utils.sh ClinVar_PM5_index (priva clinvar-pm5-index) from clinvar_vcf; read by priva acmg-assign for PM5
+clinvar_pm5_index: ""  # Built by install step D8 (priva clinvar-pm5-index) from clinvar_vcf; read by priva acmg-assign for PM5
 clinvar_gene_stat: "clinvar_2star_stats.pkl.gz"
 # Python hash seed whose set iteration order the native builders reproduce:
 # priva clinvar-gene-stats (ClinVar_Gene_stat_regenerate), and the exon-history
@@ -121,11 +121,11 @@ splicevault_prescore: ""
 
 # CADD directory storing its executable and cache files
 cadd_base_dir: ""
-####################################################Above paths will be determined automatically by install_utils.sh####################################################
+####################################################Above paths will be determined automatically by the installation####################################################
 
 
-####################################################Below will be determined manually by your reply by install_utils.sh####################################################
-# These cache files are too large you need to register a free account in Illumina to download them upon prompt of the install_utils.sh execution(size up to several hundreds of GB)
+####################################################Below you set by hand before the installation####################################################
+# These cache files are too large; register a free Illumina account, download them, and set their paths before the installation (size up to several hundreds of GB)
 
 # The PrimateAI plugin prescore file
 primateai_prescore: ""
@@ -135,7 +135,7 @@ primateai_prescore: ""
 # TSV is prepared for the unchanged VEP plugin. Provenance stays in sidecars.
 spliceai_snv_prescore: ""
 spliceai_indel_prescore: ""
-####################################################Above will be determined manually by your reply by install_utils.sh####################################################
+####################################################Above you set by hand before the installation####################################################
 
 
 
@@ -185,7 +185,7 @@ gene_dosage_sensitivity: ""
 apply_clingen_override: true
 
 # Ensembl CDS FASTA for alternative start codon detection (used for start_lost variants)
-# Download URLs (always latest via "current" symlinks, installed by install_utils.sh):
+# Download URLs (always latest via "current" symlinks, installed by install step A4):
 #   GRCh38: https://ftp.ensembl.org/pub/current_fasta/homo_sapiens/cds/Homo_sapiens.GRCh38.cds.all.fa.gz
 #   GRCh37: https://ftp.ensembl.org/pub/grch37/current/fasta/homo_sapiens/cds/Homo_sapiens.GRCh37.cds.all.fa.gz
 cds_fasta_file: ""
@@ -195,7 +195,7 @@ mavedb_url: "https://ftp.ensembl.org/pub/current_variation/MaveDB/MaveDB_variant
 mavedb_file: ""  # User-approved hg19/GRCh37 omission, 2026-10-16; hg38 keeps its own route.
 
 # Gene mechanism / DDG2P-G2P cache paths
-# Built by: bash scripts/install_utils.sh gene_pathogenic_mechanism_cache_install config.yaml
+# Built by install step F4 (modules/local/install_steps/gene_mechanism.nf)
 # Empty output/raw paths use cache_root/patho_mechanism; builders and curated
 # tables below resolve relative to this checkout. Explicit selections remain unchanged.
 gene_mechanism_cache_dir: ""
@@ -220,12 +220,8 @@ panelapp_panels_url: "https://panelapp.genomicsengland.co.uk/api/v1/panels/"
 # catalogue into <gofcards_workdir>/gofcards_exact_gof.normalized.json.gz, a
 # build intermediate; the second nests each variant's ClinVar conditions into it
 # and writes the file below, which is what every consumer reads.
-# mechanism_resource_install runs both, and runs a third step between them that
-# downloads the weekly ClinVar VCV XML the second step needs. To run them by
-# hand, keep this order:
-#   bash scripts/install_utils.sh gofcards_exact_gof_cache_install     config.yaml
-#   bash scripts/install_utils.sh gene_nonlof_mechanism_cache_install  config.yaml sources-only
-#   bash scripts/install_utils.sh gofcards_clinvar_injection_install   config.yaml
+# Install steps F5 and F7 run them, and step F6 between them downloads the
+# weekly ClinVar VCV XML the second step needs (F5, then F6, then F7).
 gofcards_exact_gof_cache: ""
 gofcards_public_excel_url: "https://download.genemed.tech/upload/GainFunCards/gofcards_data_download.xlsx"
 # Longest the normalized cache may go without being rebuilt to pick up a new
@@ -258,7 +254,7 @@ gofcards_builder_script: "scripts/build_gofcards_exact_gof_cache.py"
 gofcards_mechanism_review_tsv: "data/gofcards/gofcards_mechanism_reviews.tsv"
 
 # HPO/MONDO disease-scope resources
-# Built by: bash scripts/install_utils.sh mondo_hpo_scope_install config.yaml
+# Built by install step F1 (modules/local/install_steps/hpo_mondo.nf)
 # Releases are pinned so a normal reinstall is reproducible. Update the release,
 # URL, and checksum together when intentionally refreshing MONDO.
 hpo_release: "v2026-06-23"
@@ -317,6 +313,6 @@ pext_enabled: true                                           # Set to false to s
 pext_tissues: "Spleen,WholeBlood,Cells_EBV_transformedlymphocytes"  # Immune-related tissues for hg19
 # pext_tissues: ""                                           # Leave empty to use only mean pext (recommended for most use cases)
 
-# Auto-populated by install_utils.sh:
+# Auto-populated by install step B9:
 pext_mean_bw: ""                                             # Path to mean pext BigWig file
 pext_tissue_bw_dir: ""                                       # Directory containing tissue-specific BigWig files

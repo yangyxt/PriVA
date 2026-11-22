@@ -173,24 +173,6 @@ class ClinVarRegenerationTests(unittest.TestCase):
         result = stats.per_gene_stat(pd.DataFrame([row(LoF="HC", NMD="NMD_escaping_variant")]))
         self.assertEqual(result["putative_nmd_variants"], {"v1"})
 
-    def test_full_annotation_uses_one_native_glob_directory_list_and_same_plugin_order(self):
-        source = (ROOT / "scripts/annotation_vcf.sh").read_text()
-        function = source.split("function anno_VEP_data() {", 1)[1].split("function Calculate_CADD", 1)[0]
-        command = function.split('vep -i "${input_vcf}"', 1)[1]
-        line = next(value.strip().rstrip("\\").strip() for value in command.splitlines()
-                    if value.strip().startswith("--dir_plugins "))
-        shell = ('vep_plugins_dir=/configured/plugins; loftee_repo=/configured/loftee; '
-                 'capture() { printf "%s\\0" "$@"; }; capture ' + line)
-        result = subprocess.run(["bash", "-c", shell], check=True, capture_output=True)
-        self.assertEqual(result.stdout.split(b"\0")[:-1],
-                         [b"--dir_plugins", b"/configured/plugins /configured/loftee"])
-        glob = subprocess.run(["perl", "-e", 'print join("\\0",glob(shift @ARGV));',
-                               "/configured/plugins /configured/loftee"],
-                              check=True, capture_output=True)
-        self.assertEqual(glob.stdout.split(b"\0"), [b"/configured/plugins", b"/configured/loftee"])
-        self.assertEqual(re.findall(r"^\s+-plugin (\w+)", command, re.MULTILINE),
-                         ["UTRAnnotator", "LOEUF", "AlphaMissense", "LoF", "SpliceAI",
-                          "PrimateAI", "SpliceVault", "Conservation", "NMD"])
 
     def test_clinvar_csq_default_stays_strict_and_source_mode_is_explicit(self):
         check_clinvar_csq(self, self.directory)

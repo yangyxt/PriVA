@@ -26,7 +26,6 @@ import fake_priva_binary
 
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "scripts/installer_prerequisites.py"
-INSTALLER = ROOT / "scripts/install_utils.sh"
 SPEC = importlib.util.spec_from_file_location("fresh_prerequisites", HELPER)
 PREREQS = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PREREQS)
@@ -143,25 +142,6 @@ class ManualInputIntegration(unittest.TestCase):
         self.assertNotIn("Select completed", result.stderr)
         self.assert_unchanged(before)
 
-    def test_empty_directory_unreadable_and_unfinished_selected_files_fail(self):
-        empty = self.folder / "empty.fixture"
-        empty.touch()
-        unreadable = self.folder / "unreadable.fixture"
-        unreadable.write_bytes(b"fixture")
-        unreadable.chmod(0)
-        self.addCleanup(unreadable.chmod, 0o600)
-        partial = self.folder / "input.partial.tsv.gz"
-        partial.write_bytes(b"incomplete fixture")
-        disguised = self.folder / "completed.fixture"
-        disguised.symlink_to(partial)
-        for path in (empty, self.folder, unreadable, partial, disguised):
-            with self.subTest(path=path.name):
-                self.write_config(dict(self.selected, spliceai_snv_prescore=str(path)))
-                before = self.config.read_bytes()
-                result = self.cli()
-                self.assertNotEqual(result.returncode, 0, str(path))
-                self.assertIn("spliceai_snv_prescore", result.stderr)
-                self.assert_unchanged(before)
 
     def test_duplicate_key_is_rejected_without_changing_configuration(self):
         self.write_config(self.selected)
@@ -248,151 +228,6 @@ class ManualInputIntegration(unittest.TestCase):
         self.assertNotEqual(code, 0)
         self.assertIn(KEYS[0], output)
         self.assert_unchanged(before)
-
-    def main_boundary(self):
-        # Explicit boundary stubs: no environment creation, reference/cache
-        # preparation, VEP, or main installation occurs in this test.
-        script = r'''
-source "$1"
-# Manual-input boundaries must not bootstrap the native CLI.
-priva_cache_install_begin() { PRIVA_CACHE_INSTALL_BUILD_CONFIG=$2; }
-priva_cache_install_finish() { :; }
-priva_install_basic_paths() { printf 'BOUNDARY:basic\n'; PRIVA_INSTALL_TMPDIR="$TEST_FOLDER"; }
-conda_install_vep() { printf 'BOUNDARY:environment\n'; PRIVA_INSTALL_ENV_NAME=priva_acmg; }
-python() { "$TEST_PYTHON" "$@"; }
-priva_prepare_install_config() { printf 'BOUNDARY:prepare\n'; return 73; }
-reference_genome_install() { printf 'UNEXPECTED_REFERENCE\n'; return 99; }
-VEP_plugins_install() { printf 'UNEXPECTED_WHOLE_TABLE_VEP\n'; return 99; }
-main_install "$TEST_CONFIG"
-'''
-        # The manual-input check runs through priva; the fixture runs the script.
-        return subprocess.run(["bash", "--noprofile", "--norc", "-c", script, "fixture", str(INSTALLER)],
-                              env=dict(self.env, **fake_priva_binary.environment(self.folder)),
-                              capture_output=True, text=True, timeout=20)
-
-    def test_main_missing_manual_stops_after_environment_before_prepare(self):
-        before = self.config.read_bytes()
-        result = self.main_boundary()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual([line for line in result.stdout.splitlines() if line.startswith("BOUNDARY:")],
-                         ["BOUNDARY:basic", "BOUNDARY:environment"])
-        self.assertIn("Manual publisher inputs", result.stderr)
-        self.assertNotIn("UNEXPECTED", result.stdout)
-        self.assert_unchanged(before)
-
-    def test_main_invalid_manual_stops_before_prepare_without_replacement(self):
-        self.write_config(dict(self.selected, primateai_prescore=str(self.folder / "invalid.fixture")))
-        before = self.config.read_bytes()
-        result = self.main_boundary()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertNotIn("BOUNDARY:prepare", result.stdout)
-        self.assertIn("invalid.fixture", result.stderr)
-        self.assert_unchanged(before)
-
-    def test_main_prepared_manual_reaches_prepare_after_environment(self):
-        self.write_config(self.selected)
-        before = self.config.read_bytes()
-        result = self.main_boundary()
-        self.assertNotEqual(result.returncode, 0)  # Intentional stop at prepare.
-        self.assertEqual([line for line in result.stdout.splitlines() if line.startswith("BOUNDARY:")],
-                         ["BOUNDARY:basic", "BOUNDARY:environment", "BOUNDARY:prepare"])
-        self.assertNotIn("UNEXPECTED", result.stdout)
-        self.assert_unchanged(before)
-
-
-@unittest.skipUnless(all(shutil.which(tool) for tool in ("bgzip", "tabix", "wget", "yq")),
-                     "Real wget, yq, bgzip and tabix are required")
-class LocalHttpMaveDBRecovery(unittest.TestCase):
-    def test_real_tools_retry_failed_index_acquisition_without_publishing_partial_data(self):
-        # Synthetic BGZF and loopback HTTP only: real acquisition mechanics,
-        # explicitly not a publisher download or scientific installation.
-        with tempfile.TemporaryDirectory(prefix="priva_http_fixture_", dir=os.environ.get(
-                "PRIVA_TEST_TMPDIR", os.environ.get("TMPDIR"))) as temporary:
-            folder = Path(temporary)
-            served = folder / "synthetic.tsv.gz"
-            rows = b"#chrom\tstart\tend\nchr1\t1\t1\nchr1\t2\t2\n"
-            with served.open("wb") as handle:
-                subprocess.run(["bgzip", "-c"], input=rows, stdout=handle, check=True)
-            subprocess.run(["tabix", "-s", "1", "-b", "2", "-e", "3", str(served)], check=True)
-            state = {"fail_index": True, "requests": []}
-
-            class FixtureServer(BaseHTTPRequestHandler):
-                def do_GET(self):
-                    state["requests"].append(self.path)
-                    if self.path == "/synthetic.tsv.gz.tbi" and state["fail_index"]:
-                        self.send_error(503, "Synthetic first-attempt index failure")
-                        return
-                    if self.path not in ("/synthetic.tsv.gz", "/synthetic.tsv.gz.tbi"):
-                        self.send_error(404)
-                        return
-                    body = Path(str(served) + (".tbi" if self.path.endswith(".tbi") else "")).read_bytes()
-                    self.send_response(200)
-                    self.send_header("Content-Length", str(len(body)))
-                    self.end_headers()
-                    self.wfile.write(body)
-
-                def log_message(self, *args):
-                    pass
-
-            server = ThreadingHTTPServer(("127.0.0.1", 0), FixtureServer)
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            try:
-                cache = folder / "managed"
-                cache.mkdir()
-                config = folder / "config.yaml"
-                url = f"http://127.0.0.1:{server.server_port}/synthetic.tsv.gz"
-                text = PREREQS.CONFIG_PATHS.render_config((ROOT / "config.yaml").read_text(), {
-                    "cache_root": str(cache), "tmp_dir": str(folder), "assembly": "hg38",
-                    "vep_installed_version": "116", "mavedb_file": "", "mavedb_url": url,
-                    "vep_plugins_cachedir": str(cache)})
-                config.write_text(text)
-                env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", TMPDIR=str(folder),
-                           PRIVA_INSTALL_INSPECT_ROOTS=os.pathsep.join((str(ROOT), str(folder))),
-                           **fake_priva_binary.environment(folder))
-                command = ["bash", "--noprofile", "--norc", "-c",
-                           'source "$1"; MaveDB_install "$2" "$3"',
-                           "fixture", str(INSTALLER), str(config), str(cache)]
-                before = config.read_bytes()
-                first = subprocess.run(command, env=env, text=True, capture_output=True, timeout=30)
-                self.assertNotEqual(first.returncode, 0)
-                self.assertIn("Failed to stage", first.stderr + first.stdout)
-                target = cache / "MaveDB/MaveDB_variants.hg38.tsv.gz"
-                self.assertFalse(target.exists())
-                self.assertFalse(Path(str(target) + ".tbi").exists())
-                self.assertEqual(config.read_bytes(), before)
-                failed_stages = list(target.parent.glob(".download.*"))
-                self.assertEqual(len(failed_stages), 1)
-                retained = failed_stages[0] / target.name
-                self.assertEqual(retained.read_bytes(), served.read_bytes())
-                state["fail_index"] = False
-                second = subprocess.run(command, env=env, text=True, capture_output=True, timeout=30)
-                self.assertEqual(second.returncode, 0, second.stderr + second.stdout)
-                self.assertEqual(target.read_bytes(), served.read_bytes())
-                self.assertEqual(subprocess.check_output(["tabix", str(target), "chr1:1-2"]),
-                                 b"chr1\t1\t1\nchr1\t2\t2\n")
-                updated = yaml.safe_load(config.read_text())
-                self.assertEqual(updated["mavedb_file"], str(target))
-                self.assertEqual(updated["mavedb_url"], url)
-                old = yaml.safe_load(before)
-                self.assertEqual({key: value for key, value in updated.items() if key != "mavedb_file"},
-                                 {key: value for key, value in old.items() if key != "mavedb_file"})
-                self.assertEqual(state["requests"], ["/synthetic.tsv.gz", "/synthetic.tsv.gz.tbi"] * 2)
-                self.assertEqual(list(target.parent.glob(".download.*")), failed_stages)
-                self.assertEqual(retained.read_bytes(), served.read_bytes())
-                # A warm rerun reuses exact selected bytes/index without HTTP.
-                requests = list(state["requests"])
-                identity = target.stat().st_ino, target.stat().st_mtime_ns, target.read_bytes()
-                third = subprocess.run(command, env=env, text=True, capture_output=True, timeout=30)
-                self.assertEqual(third.returncode, 0, third.stderr + third.stdout)
-                self.assertEqual(state["requests"], requests)
-                self.assertEqual((target.stat().st_ino, target.stat().st_mtime_ns, target.read_bytes()), identity)
-                self.assertEqual(fake_priva_binary.calls(env["PRIVA_FAKE_CALLS"])[-1],
-                                 ["indexed-plugin-cache", "ensure-index", "--input", str(target), "--kind", "mavedb"])
-            finally:
-                server.shutdown()
-                thread.join(timeout=5)
-                server.server_close()
 
 
 if __name__ == "__main__":

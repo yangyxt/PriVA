@@ -1,8 +1,8 @@
 # PriVA's copies of two CADD-scripts files
 
 PriVA runs upstream CADD-scripts v1.7.2 (`CADD.sh` and its Snakemake workflow)
-with all of CADD's own data. `main_install` (`CADD_install`, through
-`scripts/cadd_scripts_install.py`) replaces two of its scripts with the copies
+with all of CADD's own data. Install step E1 (`modules/local/install_steps/cadd.nf`,
+through `scripts/cadd_scripts_install.py`) replaces two of its scripts with the copies
 here, which write the same output faster. The copies are derived from
 CADD-scripts and remain under CADD's license (`CADD-LICENSE`), not PriVA's.
 

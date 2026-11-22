@@ -100,26 +100,6 @@ class InterProAtomicInstall(unittest.TestCase):
     def assert_no_temporary(self):
         self.assertEqual(list(self.folder.glob(".*.write-*")), [])
 
-    def shell(self, parser_boundary=""):
-        config = self.folder / "config.yaml"
-        text = PATHS.render_config((ROOT / "config.yaml").read_text(), {
-            "cache_root": str(self.folder), "tmp_dir": str(self.folder), "assembly": "hg38",
-            "vep_installed_version": "116", "interpro_mapping_pickle": str(self.output),
-            "interpro_xml_gz_url": "https://fixtures.invalid/interpro.xml.gz", "alphamissense_vep_vcf": str(self.vcf)})
-        config.write_text(text)
-        before = config.read_bytes()
-        script = r'''
-source "$1"
-wget() { printf 'UNEXPECTED_NETWORK\n' >&2; return 99; }
-curl() { printf 'UNEXPECTED_NETWORK\n' >&2; return 99; }
-''' + parser_boundary + '\nInterPro_parsing "$2"\n'
-        result = subprocess.run(["bash", "--noprofile", "--norc", "-c", script, "fixture",
-                                 str(ROOT / "scripts/install_utils.sh"), str(config)],
-                                text=True, capture_output=True, timeout=30)
-        (self.folder / "shell.stdout.log").write_text(result.stdout)
-        (self.folder / "shell.stderr.log").write_text(result.stderr)
-        self.assertNotIn("UNEXPECTED_NETWORK", result.stdout + result.stderr)
-        return result, config, before
 
     def test_success_has_exact_frozen_bytes_protocol_order_and_multiplicity(self):
         original = LEGACY.parse_interpro_xml_for_mapping(str(self.xml))
@@ -291,68 +271,6 @@ curl() { printf 'UNEXPECTED_NETWORK\n' >&2; return 99; }
         result = self.cli()
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.snapshot(self.output), before)
-
-    def test_newer_empty_external_mapping_is_rebuilt_by_real_parser(self):
-        self.output.touch()
-        timestamp = max(time.time_ns(), PARSER.stat().st_mtime_ns, self.xml.stat().st_mtime_ns) + 1000000
-        os.utime(self.output, ns=(timestamp, timestamp))
-        result, config, before = self.shell()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertNotIn("already generated. Skip", result.stderr)
-        self.assertEqual(self.output.read_bytes(), pickle.dumps(LEGACY.parse_interpro_xml_for_mapping(str(self.xml)),
-                                                                protocol=pickle.HIGHEST_PROTOCOL))
-
-    def test_stale_previous_final_and_config_stay_exact_on_real_parse_failure(self):
-        self.write_xml(b"<interprodb><empty/></interprodb>")
-        self.output.write_bytes(b"previous final fixture")
-        os.utime(self.output, ns=(1, 1))
-        before = self.snapshot(self.output)
-        result, config, config_before = self.shell()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(self.snapshot(self.output), before)
-        self.assertEqual(config.read_bytes(), config_before)
-
-    def test_genuine_nonempty_bundle_is_reused_without_parser_or_acquisition(self):
-        data = self.folder / "source_data"
-        bundle = data / "InterPro/Interpro_entry_mapping.pkl.gz"
-        bundle.parent.mkdir(parents=True)
-        # Opaque on purpose: genuine bundles require existence/nonzero only.
-        bundle.write_bytes(b"opaque original bundled snapshot fixture")
-        config = self.folder / "config.yaml"
-        config.write_text(PATHS.render_config((ROOT / "config.yaml").read_text(),
-                                              {"interpro_mapping_pickle": str(bundle)}))
-        before = self.snapshot(bundle), config.read_bytes()
-        script = r'''
-source "$1"
-DATA_DIR=$3
-python() { printf 'UNEXPECTED_PARSER\n'; return 99; }
-wget() { printf 'UNEXPECTED_ACQUISITION\n'; return 99; }
-InterPro_parsing "$2"
-'''
-        result = subprocess.run(["bash", "--noprofile", "--norc", "-c", script, "fixture",
-                                 str(ROOT / "scripts/install_utils.sh"), str(config), str(data)],
-                                text=True, capture_output=True, timeout=30)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertNotIn("UNEXPECTED", result.stdout + result.stderr)
-        self.assertEqual((self.snapshot(bundle), config.read_bytes()), before)
-
-    def test_shell_rejects_missing_or_empty_output_from_zero_exit_boundary(self):
-        for produced in ("missing", "empty"):
-            with self.subTest(produced=produced):
-                self.output.unlink(missing_ok=True)
-                boundary = r'''
-# Explicit output-postcondition fault injection; the real parser is covered above.
-python() {
-    if [[ "$1" != */protein_domain_mapping.py ]]; then command python "$@"; return; fi
-''' + (r'''while [[ $# -gt 0 ]]; do
-    if [[ "$1" == --mapping_output ]]; then : > "$2"; break; fi
-    shift
-done
-''' if produced == "empty" else "") + '\nreturn 0\n}\n'
-                result, config, before = self.shell(boundary)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("Missing or empty generated InterPro mapping", result.stderr)
-                self.assertEqual(config.read_bytes(), before)
 
 
 if __name__ == "__main__":

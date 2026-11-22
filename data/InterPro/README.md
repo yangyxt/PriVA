@@ -6,8 +6,8 @@ mapping from `(database, accession)` to an ordered list of InterPro entries, inc
 three-tuples and the full abstract. The Rust archive pools repeated texts and is read with
 the checked `cache_convert::interpro_mapping::InterproCache` reader.
 
-`scripts/install_utils.sh` provides `InterPro_parsing` for the `interpro_mapping_pickle`
-configuration resource. `scripts/protein_domain_mapping.py` produces the Python mapping;
+Install step C8 (`modules/local/install_steps/interpro_mapping.nf`) provides the
+`interpro_mapping_pickle` configuration resource. `scripts/protein_domain_mapping.py` produces the Python mapping;
 `priva cache-convert interpro_mapping_pickle --pickle SOURCE --output DESTINATION` converts
 that mapping to the Rust format. The original pickle remains available for Python users.
 

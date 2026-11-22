@@ -20,11 +20,7 @@ arguments after `--`.
 every option except --checker-source, which the native command requires.
 `mechanism-source` runs scripts/mechanism_source_input.py with the same arguments.
 `alphamissense-vcf build --input TSV --output VCF` runs scripts/alphmis_tsv2vcf.py
-TSV VCF. `alpha-annotation-base` runs scripts/alphamissense_annotation_base.py
-with the same arguments, but with --source-root pointing at a private copy
-whose install_utils.sh has the original Python converter line instead of the
-native one; priva's recipe fingerprint counts the two lines as the same step.
-A source root without scripts/install_utils.sh is passed on unchanged.
+TSV VCF.
 `installer-prerequisites` runs scripts/installer_prerequisites.py with the same
 arguments (CONFIG first, then the script's own options).
 `reference-resources` runs scripts/reference_resources.py with the same
@@ -36,8 +32,7 @@ tests/fixtures/install-checks-8070d3d, with its positional arguments.
 `vep-plugins MODE` runs scripts/vep_plugins_release.py with the same mode and
 options; `gnomad-cache COMMAND` runs scripts/gnomad_cache.py and
 `alphamissense-cache COMMAND` runs scripts/alphamissense_cache.py and
-`spliceai2-prepare COMMAND` runs scripts/spliceai2_to_vep_vcf.py and
-`clinvar-gene-refresh COMMAND` runs scripts/clinvar_gene_refresh.py likewise.
+`spliceai2-prepare COMMAND` runs scripts/spliceai2_to_vep_vcf.py likewise.
 `gene-nonlof-mechanism` runs scripts/build_gene_nonlof_mechanism_cache.py and
 `gofcards-exact-gof` runs scripts/build_gofcards_exact_gof_cache.py with the same
 options.
@@ -214,24 +209,6 @@ elif command == "mechanism-source":
 elif command == "alphamissense-vcf" and rest[:1] == ["build"]:
     values = dict(options(rest[1:], {"--input", "--output"}))
     script, forwarded = "alphmis_tsv2vcf.py", [values["--input"], values["--output"]]
-elif command == "alpha-annotation-base":
-    import tempfile
-    from pathlib import Path as SourcePath
-    forwarded = list(rest)
-    index = forwarded.index("--source-root") + 1
-    real = SourcePath(forwarded[index])
-    native = '"${PRIVA_BIN}" alphamissense-vcf build --input "$alphamissense_prescore" --output "$converted" && \\'
-    original = 'python "$convert_py" "$alphamissense_prescore" "$converted" && \\'
-    # A test's own source root without install_utils.sh has no converter line
-    # to restore, and is passed on as it is.
-    if (real / "scripts/install_utils.sh").is_file():
-        view = SourcePath(tempfile.mkdtemp(prefix="priva_fixture_source_"))
-        (view / "scripts").mkdir()
-        (view / "scripts/alphmis_tsv2vcf.py").symlink_to(real / "scripts/alphmis_tsv2vcf.py")
-        (view / "scripts/install_utils.sh").write_text(
-            (real / "scripts/install_utils.sh").read_text().replace(native, original))
-        forwarded[index] = str(view)
-    script = "alphamissense_annotation_base.py"
 elif command == "installer-prerequisites":
     # Same positional CONFIG and options; the native command requires --source-root.
     if "--source-root" not in rest:
@@ -285,8 +262,6 @@ elif command == "alphamissense-cache" and rest[:1] in (["install"], ["validate"]
     script, forwarded = "alphamissense_cache.py", rest
 elif command == "spliceai2-prepare" and rest[:1] in (["prepare"], ["gene-context"]):
     script, forwarded = "spliceai2_to_vep_vcf.py", rest
-elif command == "clinvar-gene-refresh":
-    script, forwarded = "clinvar_gene_refresh.py", rest
 elif command == "indexed-plugin-cache":
     flags = [value for value in rest[1:] if value == "--print-path"]
     pairs = options([value for value in rest[1:] if value != "--print-path"],

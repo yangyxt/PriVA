@@ -1,8 +1,9 @@
-// Install tasks. Each install step of conf/install_steps.json runs as its own
-// task through priva install-task (rust/src/install_task/). Its results live in
-// resource_root/STEP/LINEAGE/; a folder that already holds receipt.json is
-// reused without running (storeDir), across runs and after the work folder
-// is deleted.
+// The install runner's tasks (priva install-task, rust/src/install_task/):
+// releases, the plan, the preflight checks and the publish. Each install step
+// of conf/install_steps.json is its own process in modules/local/install_steps/;
+// its results live in resource_root/STEP/LINEAGE/, and a folder that already
+// holds receipt.json is reused without running (storeDir), across runs and
+// after the work folder is deleted.
 
 // The current release of a changing source (registry "release"); pinned
 // sources are checked only when --refresh names them.
@@ -59,40 +60,6 @@ process INSTALL_PREFLIGHT {
     '${params.priva_binary}' install-task preflight --source-root '${projectDir}' --registry '${projectDir}/conf/install_steps.json' --plan plan.json --stub
     mkdir checked && cp plan.json checked/plan.json
     """
-}
-
-process INSTALL_STEP {
-    tag "${id} ${lineage}"
-    label 'install'
-    storeDir "${params.resource_root}/${id}/${lineage}"
-    input:
-    tuple val(id), val(lineage), path(plan, stageAs: 'plan.json'), val(inputs)
-    output:
-    path('receipt.json'), emit: receipt
-    script:
-    def inputArgs = inputs.collect { "--input '${it}'" }.join(' ')
-    def folder = "${params.resource_root}/${id}/${lineage}"
-    if (lineage.startsWith('adopted-'))
-        """
-        '${params.priva_binary}' install-task adopt --source-root '${projectDir}' --plan plan.json --step ${id} --lineage ${lineage} --receipt receipt.json
-        """
-    else
-        """
-        export PRIVA_BINARY='${params.priva_binary}' INSTALL_THREADS=${task.cpus}
-        '${params.priva_binary}' install-task run --source-root '${projectDir}' --registry '${projectDir}/conf/install_steps.json' --plan plan.json --step ${id} --lineage ${lineage} --folder '${folder}' --receipt receipt.json ${inputArgs}
-        """
-    stub:
-    def inputArgs = inputs.collect { "--input '${it}'" }.join(' ')
-    def folder = "${params.resource_root}/${id}/${lineage}"
-    if (lineage.startsWith('adopted-'))
-        """
-        '${params.priva_binary}' install-task adopt --source-root '${projectDir}' --plan plan.json --step ${id} --lineage ${lineage} --receipt receipt.json
-        """
-    else
-        """
-        export PRIVA_BINARY='${params.priva_binary}' INSTALL_THREADS=${task.cpus}
-        '${params.priva_binary}' install-task run --source-root '${projectDir}' --registry '${projectDir}/conf/install_steps.json' --plan plan.json --step ${id} --lineage ${lineage} --folder '${folder}' --receipt receipt.json ${inputArgs} --stub
-        """
 }
 
 process INSTALL_PUBLISH {

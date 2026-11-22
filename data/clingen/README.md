@@ -5,8 +5,8 @@ snapshots. The corresponding `.v1.rkyv` files use `PRIVARKV` schema 10, version 
 with the checked `cache_convert::clingen_map::ClingenCache` reader. Evidence codes remain
 text; a present float NaN code is represented by `None`, separately from an absent variant.
 
-`scripts/install_utils.sh` provides `ClinGen_deploy` for the `clingen_map` configuration
-resource, selecting the matching assembly. `scripts/prepare_clingen_map.py` produces the
+Install step D9 (`modules/local/install_steps/clingen_map.nf`) provides the `clingen_map`
+configuration resource, selecting the matching assembly. `scripts/prepare_clingen_map.py` produces the
 Python mappings; `priva cache-convert clingen_map --pickle SOURCE --output DESTINATION`
 converts either assembly to the Rust format. The original pickles and the gene dosage
 sensitivity tables remain available.

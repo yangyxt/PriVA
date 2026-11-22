@@ -1,20 +1,22 @@
 //! Read-only resource lifecycle inventory; no cache payload is opened.
 //! Preserve the Python registry's object order and validation/traversal order.
+//! Each resource names the install steps that acquire or build it
+//! (`install_entrypoints`) and those kept to refresh it (`refresh.entrypoints`),
+//! by their IDs in `conf/install_steps.json`; `--check-routes` checks them.
 use crate::cli::{Result, invalid};
 use crate::json_text::{self, Json};
 use crate::python_args::{Parsed, parse_long_options_with_flags, require_options};
 use crate::python_set_order::StringSet;
-use crate::python_text::is_python_space;
 use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
 const HELP: &str = "usage: priva cache-resources {list|show|refresh-plan|validate} --registry JSON [--resource NAME] [--refreshable] [--check-routes]\n\
-Read only the selected resource registry and, for --check-routes, its adjacent scripts/install_utils.sh.\n\
+Read only the selected resource registry and, for --check-routes, the install step registry beside it (conf/install_steps.json).\n\
 Use an explicit PYTHONHASHSEED (0..4294967295) to preserve Python's dependency/route set order.\n\
 The registry path is explicit; the binary's install location never selects a checkout.\n\
-Existing Python callers remain unchanged. A refresh plan is an inventory, never execution authorization.";
+A refresh plan is an inventory, never execution authorization.";
 const PLAN_NOTE: &str = "Review affected resources for the selected assembly/profile. This list is not an execution order or authorization to refresh.";
 
 fn error(category: &'static str, message: impl Into<String>) -> Box<dyn std::error::Error> {
@@ -181,41 +183,24 @@ fn validate_registry(registry: &Json, seed: u32) -> Result<()> {
     Ok(())
 }
 
-/// The source regex is literal except for Python whitespace and its ASCII
-/// identifier. Whitespace may span lines; only the initial anchor is multiline.
-fn shell_functions(shell: &str) -> HashSet<String> {
-    let mut names = HashSet::new();
-    for start in std::iter::once(0).chain(shell.match_indices('\n').map(|(i, _)| i + 1)) {
-        let Some(after) = shell[start..].strip_prefix("function") else {
-            continue;
-        };
-        let tail = after.trim_start_matches(is_python_space);
-        if tail.len() == after.len() {
-            continue;
-        }
-        let mut chars = tail.char_indices();
-        if !chars
-            .next()
-            .is_some_and(|(_, c)| c.is_ascii_alphabetic() || c == '_')
-        {
-            continue;
-        }
-        let end = chars
-            .find(|(_, c)| !c.is_ascii_alphanumeric() && *c != '_')
-            .map_or(tail.len(), |(i, _)| i);
-        if tail[end..]
-            .trim_start_matches(is_python_space)
-            .starts_with('(')
-        {
-            names.insert(tail[..end].to_owned());
-        }
-    }
-    names
+/// The step IDs of the install registry beside the resource registry
+/// (`conf/install_steps.json`).
+fn install_steps(source_root: &Path) -> Result<HashSet<String>> {
+    let path = source_root.join("conf/install_steps.json");
+    let registry = json_text::parse(&read_text(&path)?, false)
+        .map_err(|message| error("ValueError", format!("{}: {message}", path.display())))?;
+    let steps = match registry.get("steps") {
+        Some(Json::Array(steps)) => steps,
+        _ => return Err(error("ValueError", format!("{}: no steps", path.display()))),
+    };
+    Ok(steps
+        .iter()
+        .filter_map(|step| step.get("id").and_then(Json::as_str).map(str::to_owned))
+        .collect())
 }
 
 fn check_routes(registry: &Json, source_root: &Path, seed: u32) -> Result<()> {
-    let shell = read_text(&source_root.join("scripts/install_utils.sh"))?;
-    let functions = shell_functions(&shell);
+    let functions = install_steps(source_root)?;
     for (name, entry) in registry.get("resources").unwrap().as_object().unwrap() {
         let mut names = strings(entry.get("refresh").unwrap().get("entrypoints").unwrap()).unwrap();
         let mut nonstrings = Vec::new();
@@ -224,7 +209,7 @@ fn check_routes(registry: &Json, source_root: &Path, seed: u32) -> Result<()> {
                 Json::Array(values) => {
                     // set(list) consumes the complete iterable before any
                     // missing-route check. Its first unhashable member wins
-                    // even when an earlier string names a missing function.
+                    // even when an earlier string names a missing step.
                     for value in values {
                         if matches!(value, Json::Array(_) | Json::Object(_)) {
                             return Err(error(
@@ -251,7 +236,7 @@ fn check_routes(registry: &Json, source_root: &Path, seed: u32) -> Result<()> {
             }
         }
         if !nonstrings.is_empty() {
-            // A lone non-string is necessarily absent from a string function
+            // A lone non-string is necessarily absent from a string step
             // catalogue. If all string members exist, the deciding error is
             // independent of mixed-object set hashing/iteration. Multiple
             // candidates remain outside the proven string-set profile.
@@ -271,7 +256,7 @@ fn check_routes(registry: &Json, source_root: &Path, seed: u32) -> Result<()> {
             };
             return Err(error(
                 "ValueError",
-                format!("Missing installer entrypoint {missing} for {name}"),
+                format!("Missing install step {missing} for {name}"),
             ));
         }
         let mut ordered = StringSet::new(seed);
@@ -281,7 +266,7 @@ fn check_routes(registry: &Json, source_root: &Path, seed: u32) -> Result<()> {
         for function in ordered.into_order() {
             require(
                 functions.contains(&function),
-                format!("Missing installer entrypoint {function} for {name}"),
+                format!("Missing install step {function} for {name}"),
             )?;
         }
     }
@@ -579,14 +564,6 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn installer_pattern_keeps_python_whitespace_and_multiline_anchor() {
-        let shell = "function one() {}\n function hidden() {}\nfunction\n_two\u{2003}(\nfunction a-b() {}\nfunction\u{1c}four(\nfunction 9bad(\nfunctionlast()";
-        assert_eq!(
-            shell_functions(shell),
-            HashSet::from(["one".into(), "_two".into(), "four".into()])
-        );
-    }
     #[test]
     fn identifiers_are_ascii_and_whole_string_matches() {
         assert!(id_valid("a_9"));

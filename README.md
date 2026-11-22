@@ -45,17 +45,9 @@ Edit the copy before installation:
 | `primateai_prescore` | Completed publisher PrimateAI file for the selected assembly |
 | `spliceai_snv_prescore`, `spliceai_indel_prescore` | Completed publisher files appropriate to the selected assembly/profile |
 
-Obtain restricted publisher files under their own registration and license terms. Interactive installation can prompt for unset manual paths; noninteractive installation needs them beforehand.
+Obtain restricted publisher files under their own registration and license terms, and set their paths before installing; the installation does not prompt for them.
 
-```bash
-bash "$PRIVA_ROOT/scripts/install_utils.sh" main_install "$PRIVA_CONFIG"
-```
-
-This prepares `priva_acmg`, reuses bundled snapshots, acquires/builds other resources beneath `cache_root`, and updates managed paths in the selected configuration. It also installs the pinned Nextflow25.10.4 driver and private JRE beneath `cache_root/runtime/priva-nextflow-25.10.4`. It builds the PriVA program `priva` (saved as `priva_binary`) and the ClinVar PM5 index (saved as `clinvar_pm5_index`); see [the PriVA program](#scientific-resources-and-the-priva-program). No family input is required at this stage. Rerun the same command to reuse completed preparation.
-
-### Install as Nextflow tasks
-
-The installation can also run as one Nextflow task per install step, listed in [`conf/install_steps.json`](conf/install_steps.json). Four commands set it up and start it, each the tool's own; `main_install` above remains the qualified route until a complete installation through these tasks has been compared with it. Use the `vep_installed_version` of your configuration in the first line (`116` here):
+The installation runs as one Nextflow task per install step, listed in [`conf/install_steps.json`](conf/install_steps.json). Four commands set it up and start it, each the tool's own. Use the `vep_installed_version` of your configuration in the first line (`116` here):
 
 ```mermaid
 flowchart LR
@@ -88,7 +80,9 @@ mkdir -p "$PRIVA_ROOT/../priva-install" && cd "$PRIVA_ROOT/../priva-install"
   --priva_binary "$PRIVA_BINARY" --install_outdir "$PRIVA_CACHE/published"
 ```
 
-Before any step, a preflight task checks the files you supply for the steps that will run (the SpliceAI and PrimateAI publisher files must be set, as absolute paths to completed files) and the data files shipped in the checkout, so a missing file stops the run before any download. The installed configuration is `published/config.yaml`, with `priva_binary` set; use it as `PRIVA_CONFIG` in the sections below. This route does not yet export the installed environments; run `priva_export_installed_environment` (below) afterwards when you need those files.
+Before any step, a preflight task checks the files you supply for the steps that will run (the SpliceAI and PrimateAI publisher files must be set, as absolute paths to completed files) and the data files shipped in the checkout, so a missing file stops the run before any download. The installed configuration is `published/config.yaml`, with `priva_binary` and the ClinVar PM5 index (`clinvar_pm5_index`) set; use it as `PRIVA_CONFIG` in the sections below. The installation does not export the installed environments; [export them](#exporting-the-installed-environments) afterwards when you need those files. No family input is required at this stage. Run the same command again to reuse the steps already built.
+
+The shell installer that preceded this route (`scripts/install_utils.sh main_install`) was removed; commit 841e200 is the last tree that has it.
 
 Each step writes only into `resource_root/STEP/LINEAGE/data`. Its lineage is a hash of the step's code, the settings that change its results, the files you supply, the current release of a changing source (ClinVar, InterPro, ClinGen, VEP plugins and others) and the content of every step it needs (a hash of that step's result files). A step whose folder already holds `receipt.json` is reused, so a later run builds only what changed, and a step below it only when its inputs' files changed. Finished folders are read-only. The last task writes one configuration and `resources.lock.json`, which names every step's lineage and output keys. `--adopt_config OLD.yaml --adopt all --run_steps ID,ID` takes every other step's files from an existing installation without copying them. SpliceVault, MaveDB, UTRannotator and LOFTEE keep the release they were first built from (recorded in `resource_root/pins.json`) until you ask for a newer one with `--refresh B5,B6,B1,B8`. The ClinVar download (step D0) keeps its release for three calendar months, the original installer's refresh interval, then takes the current one; `--refresh D0` takes it sooner. gnomAD downloads run as 24 tasks, one per chromosome.
 
@@ -123,18 +117,17 @@ deterministic reporting of all calculated UTR effects and retains the original
 module and patch. The biological calculations are unchanged; other VEP releases
 are left unchanged. See [`data/vep`](data/vep/README.md).
 
-CADD scores come from upstream `CADD.sh` (CADD-scripts v1.7.2) with all of CADD's own data. `main_install` installs it the original way, each file downloaded only when missing with its MD5 checked once, then replaces two of its scripts with PriVA's faster copies in [`scripts/cadd_scripts`](scripts/cadd_scripts/README.md): the prescore lookup starts from a position index built once beside each prescored table, and MMSplice reloads a saved exon table. Both write the same output as upstream. `CADD.sh` runs as a child process whose Snakemake builds its own environments under `cadd_base_dir/envs/conda`; its Snakemake needs a `conda` program (24.7.1 or later) on `PATH`. The standalone `cadd.nf` runs the same `CADD.sh` on one VCF and writes its CADD table:
+CADD scores come from upstream `CADD.sh` (CADD-scripts v1.7.2) with all of CADD's own data. Install step E1 installs it the original way, each file downloaded only when missing with its MD5 checked once, then replaces two of its scripts with PriVA's faster copies in [`scripts/cadd_scripts`](scripts/cadd_scripts/README.md): the prescore lookup starts from a position index built once beside each prescored table, and MMSplice reloads a saved exon table. Both write the same output as upstream. `CADD.sh` runs as a child process whose Snakemake builds its own environments under `cadd_base_dir/envs/conda`; its Snakemake needs a `conda` program (24.7.1 or later) on `PATH`. The standalone `cadd.nf` runs the same `CADD.sh` on one VCF and writes its CADD table:
 
-Fresh `priva_acmg` environments include Conda. For existing environments, the
-installer checks `PATH`, `CONDA_EXE`, then `cadd_parent_dir/conda_frontend`.
+Fresh `priva_acmg` environments include Conda. For existing environments, step
+E1 checks `PATH`, `CONDA_EXE`, then `cadd_parent_dir/conda_frontend`.
 If none supplies compatible Conda, it uses the selected Micromamba/Mamba/Conda
 to create that separate tool-only frontend with Conda 24.9.2 from conda-forge.
 Existing scientific environments and their package exports remain unchanged.
 CADD callers discover the same frontend without replacing the active Python.
-With `priva_acmg` active, prepare only this prerequisite with
-`bash scripts/install_utils.sh CADD_conda_install --config /path/to/config.yaml`
-after the configuration's cache paths have been prepared. An incomplete frontend
-is retained and reported; it is never overwritten or mistaken for a ready one.
+Step E1 prepares this prerequisite before it installs CADD. An incomplete
+frontend is retained and reported; it is never overwritten or mistaken for a
+ready one.
 
 ```bash
 nextflow run "$PRIVA_ROOT/cadd.nf" -c "$PRIVA_ROOT/conf/cadd.config" \
@@ -142,14 +135,9 @@ nextflow run "$PRIVA_ROOT/cadd.nf" -c "$PRIVA_ROOT/conf/cadd.config" \
   --cadd_base_dir "$PRIVA_CACHE/CADD/CADD-scripts-1.7.2" --outdir "$(realpath cadd_out)"
 ```
 
-At completion, the installer exports the packages actually installed, including version/build pins and pip dependencies, to `cache_root/priva_acmg.installed.yml` and, for each environment `CADD.sh` built, `cache_root/cadd-*.installed.yml`. These portable YAML files omit host prefixes and environment variables. To repeat only this export:
+### Exporting the installed environments
 
-```bash
-bash "$PRIVA_ROOT/scripts/install_utils.sh" priva_export_installed_environment --config "$PRIVA_CONFIG"
-```
-
-The optional native export procedures accept the same selected environment and
-write package-only YAML beneath `cache_root`:
+`priva installed-environment` exports the packages actually installed, including version/build pins and pip dependencies, to `cache_root/priva_acmg.installed.yml` and, for each environment `CADD.sh` built, `cache_root/cadd-*.installed.yml`. These portable YAML files omit host prefixes and environment variables:
 
 ```bash
 "$PRIVA_BINARY" installed-environment export --config "$PRIVA_CONFIG" \
@@ -162,8 +150,8 @@ Use `export --prefix /absolute/completed/prefix --name portable_name` for an
 explicit prefix. A byte-identical existing export is reused read-only. A linked
 export additionally needs stable, committed local git-annex content; a changed
 or foreign linked destination is retained and refused. Ordinary matching-schema
-exports can be atomically refreshed. These optional commands do not activate,
-solve, or install environments; the installer runs `export-installation` through them.
+exports can be atomically refreshed. These commands do not activate, solve, or
+install environments.
 
 
 Small HGNC snapshots and assembly/release-specific transcript mappings remain bundled under [`data/hgnc`](data/hgnc/README.md). Default installation selects the mapping for the configured assembly and VEP major; explicitly supplied mappings stay selected. Different versions have distinct filenames.
@@ -226,13 +214,13 @@ Each family's outputs carry its PED family identifier, for example
 `cohort.anno.FAM1.filtered.tsv`; a run without `--ped` writes `cohort.anno.filtered.tsv`.
 Families run in parallel as far as `--family_cpus` and the executor allow.
 
-Annotation runs as one task per step of `annotation_vcf.sh`, in this order:
+Annotation runs as one task per annotation step, in this order:
 
 1. Preprocessing.
 2. gnomAD, ClinVar, control cohort, VEP and CADD at the same time, each on its own
    copy of the preprocessed VCF.
 3. A merge that copies each step's new INFO fields and header lines onto the
-   preprocessed VCF in the script's order. It refuses a step that kept a different
+   preprocessed VCF in a fixed order. It refuses a step that kept a different
    record or changed anything else.
 
 The result is the same annotated VCF and CADD table as the earlier single
@@ -243,11 +231,11 @@ step's results per variant, so later runs annotate only variants the hub has not
 seen:
 
 1. Validation names one hub folder (lineage) per step from the resources that step
-   reads and the code that step runs: its shell function, the functions that one
-   calls, the script and data files they name, and the Rust files behind the
-   `priva` commands they run. A changed resource or a change
+   reads and the code that step runs: its Rust file in `rust/src/pipeline_steps`,
+   the Rust files that one reaches, the data files they name, and the Rust files
+   behind the `priva` commands they run. A changed resource or a change
    to that code gives that step a new, empty folder; a change to another step's
-   function leaves it alone (`priva annotation-hub lineages` lists what each step
+   code leaves it alone (`priva annotation-hub lineages` lists what each step
    counts). The control cohort step has no folder when its counts come from the
    cohort itself.
 2. `HUB_LOOKUP` splits the preprocessed VCF into stored and new variants per step.
@@ -342,9 +330,9 @@ read `HGNC_ID`.
 
 Managed VEP116 mappings use Ensembl BioMart116; GRCh37 retains its GRCh37 annotation-base75 lineage and is not a GRCh38 fallback. [HCSeeker](data/HCSeeker/README.md) originates in GRCh38 protein space; [gnomAD RMC](data/gnomAD_RMC/README.md) originates in GRCh37, with derived opposite-assembly protein-coordinate tables. [GoFCards](data/gofcards/README.md) starts from GRCh37 variant records and includes derived GRCh38 representations; exact variant evidence is not a whole-gene mechanism assertion. Preserve assembly, transcript and source provenance when choosing these resources.
 
-PriVA's own pipeline steps run in one compiled program, `priva`, built from [`rust/`](rust/CONVERSION.md): variant IDs, the CADD hub cache, family filtering, the combined annotation table, the SpliceAI version check and cache registration, splicing and UTR interpretation, and the whole ACMG step (criteria, scoring and ranking). CADD scores come from upstream `CADD.sh`. [`rust/CONVERSION.md`](rust/CONVERSION.md) records how each step was compared with the Python script it replaces. PM5 deliberately follows residue rules that the Python script does not have; it reads an index of the confident pathogenic ClinVar protein changes (`clinvar_pm5_index`), which `main_install` builds from the VEP-annotated ClinVar VCF.
+PriVA's own pipeline steps run in one compiled program, `priva`, built from [`rust/`](rust/CONVERSION.md): variant IDs, the CADD hub cache, family filtering, the combined annotation table, the SpliceAI version check and cache registration, splicing and UTR interpretation, and the whole ACMG step (criteria, scoring and ranking). CADD scores come from upstream `CADD.sh`. [`rust/CONVERSION.md`](rust/CONVERSION.md) records how each step was compared with the Python script it replaces. PM5 deliberately follows residue rules that the Python script does not have; it reads an index of the confident pathogenic ClinVar protein changes (`clinvar_pm5_index`), which the installation builds from the VEP-annotated ClinVar VCF.
 
-`main_install` builds `priva` beneath `cache_root/runtime/priva-rust/<identity>/bin/priva` and saves that path as `priva_binary` in the configuration. New installations include the source-derived dependency notices in the sibling `licenses/` directory; keep these notices with the executable when distributing it. The pipeline scripts look for the program in this order: the environment variable `PRIVA_BINARY`, the configuration key `priva_binary`, then `priva` on `PATH`. The Nextflow resource manifest pins the program's SHA-256; a rebuilt program needs a new manifest and output directory. Inspect the installed program and its build record with:
+`bootstrap_priva_rust.py install` (step 3 of the installation) builds `priva` beneath `cache_root/runtime/priva-rust/<identity>/bin/priva`, and the installation saves that path as `priva_binary` in the configuration. New installations include the source-derived dependency notices in the sibling `licenses/` directory; keep these notices with the executable when distributing it. A run uses the configuration's `priva_binary`; `priva task step`, which runs one pipeline step by hand, runs the `priva` commands of that step with the environment variable `PRIVA_BINARY`, else with itself. The Nextflow resource manifest pins the program's SHA-256; a rebuilt program needs a new manifest and output directory. Inspect the installed program and its build record with:
 
 ```bash
 python "$PRIVA_ROOT/scripts/bootstrap_priva_rust.py" check \
@@ -408,15 +396,14 @@ PYTHONHASHSEED=42 "$PRIVA_BINARY" cache-resources refresh-plan \
 ```
 
 `list`, `list --refreshable` and `show --resource NAME` use the same registry
-option. A route check reads `scripts/install_utils.sh` beside the resolved
-registry. These commands never execute a refresh or read cache payloads.
-An explicit `PYTHONHASHSEED` retains CPython 3.12 string-set iteration order;
-use the same seed when comparing the Python helper. The native interface
+option. A route check reads `conf/install_steps.json` beside the resolved
+registry and checks that every install step a resource names is there. These
+commands never execute a refresh or read cache payloads.
+An explicit `PYTHONHASHSEED` retains CPython 3.12 string-set iteration order. The native interface
 requires the registry path independently of its binary installation directory.
 Route sets with multiple non-string entries or competing missing string routes,
 JSON integers outside 128 bits, lone surrogate strings, deep nesting and
 interpreter recursion limits remain outside this optional interface's compatibility scope.
-Existing callers continue to use `scripts/cache_resources.py`.
 
 The optional acquisition-source helper validates an explicitly selected input:
 

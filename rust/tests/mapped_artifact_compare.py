@@ -3,6 +3,11 @@
 
 python mapped_artifact_compare.py check --repo CHECKOUT --binary PRIVA --work-root EMPTY
 
+The PM1 kind only: phase 7 removed the motif kind and adopt-native with the
+shell installer that ran them (rust/CONVERSION.md, phase 7). The script's
+"Use the selected motif/PM1 scientific producer" is compared as the
+command's "Use the selected PM1 scientific producer".
+
 Scientific producer scripts here are labelled tiny byte fixtures. No scientific
 calculation, public download or installed resource write occurs. Fault injection
 interposes libc rename only in these child processes, never in production code.
@@ -58,30 +63,26 @@ int rename(const char *a,const char *b){
 '''
 
 class Fixture:
-    def __init__(self,root,repo,shim,kind='motifs',bound=False):
+    def __init__(self,root,repo,shim,kind='pm1'):
         self.root=root
-        alpha=load(repo/'rust/tests/alpha_annotation_base_compare.py') if bound else None
-        base=alpha.Fixture(root,repo) if bound else None
-        if not bound:root.mkdir(parents=True)
-        self.cache=base.cache if bound else root/'managed cache';self.output=self.cache/'plugins/AlphaMissense';self.output.mkdir(parents=True,exist_ok=True)
-        self.source=base.source if bound else root/'source';self.scripts=self.source/'scripts';self.scripts.mkdir(parents=True,exist_ok=True)
+        root.mkdir(parents=True)
+        self.cache=root/'managed cache';self.output=self.cache/'plugins/AlphaMissense';self.output.mkdir(parents=True,exist_ok=True)
+        self.source=root/'source';self.scripts=self.source/'scripts';self.scripts.mkdir(parents=True,exist_ok=True)
         for name in ['mapped_artifact_publish.py','biomart_nm_to_enst.py','biomart_ftp_nm_to_enst.py']:
             shutil.copy2(repo/'scripts'/name,self.scripts/name)
-        self.kind=kind;self.producer=self.scripts/('am_pick_missense_constrained_segments.py' if kind=='motifs' else 'prepare_pm1_regions.py');self.producer.write_text(PRODUCER)
-        self.config=base.config if bound else root/'runtime config.json'
-        if not bound:self.config.write_text('{"fixture":"actual runtime configuration"}\n')
+        self.kind=kind;self.producer=self.scripts/'prepare_pm1_regions.py';self.producer.write_text(PRODUCER)
+        self.config=root/'runtime config.json'
+        self.config.write_text('{"fixture":"actual runtime configuration"}\n')
         self.mapping=root/'selected mapping.tsv';self.mapping.write_text('deliberately unpinned fixture mapping\n')
         self.inputs=[]
         for name in ['gnomad.tsv','spots.tsv']:
             p=root/name;p.write_text('fixture anchor\n');self.inputs.append(p)
         self.target=self.output/'selected.pkl';self.outside=root/'outside.pkl';self.outside.write_bytes(b'unchanged outside fixture')
-        self.env=dict(base.env if bound else os.environ,PYTHONDONTWRITEBYTECODE='1',LD_PRELOAD=str(shim),FIXTURE_RENAMES=str(root/'renames.tsv'),FIXTURE_ARGV=str(root/'argv.json'),FIXTURE_OUTSIDE=str(self.outside))
+        self.env=dict(os.environ,PYTHONDONTWRITEBYTECODE='1',LD_PRELOAD=str(shim),FIXTURE_RENAMES=str(root/'renames.tsv'),FIXTURE_ARGV=str(root/'argv.json'),FIXTURE_OUTSIDE=str(self.outside))
         self.module=load(self.scripts/'mapped_artifact_publish.py')
         self.kw=dict(artifact=str(self.target),mapping=str(self.mapping),input=list(map(str,self.inputs)),cache_root=str(self.cache),output_dir=str(self.output),assembly='hg38',config=str(self.config),producer=str(self.producer),kind=kind,annotation_base=None,native_lineage=None)
         self.arguments=['--literal',"spaces ' quotes ; $(never_exec) `never_exec`",'--output',str(self.target),'--skip_das']
         self.expected=json.dumps(self.module.BIOMART.mapping_identity(self.mapping,self.inputs))
-        if bound:
-            base.published();self.kw['annotation_base']=base.cfg['alphamissense_vep_base_vcf']
     def complete(self,target=None):
         target=target or self.target;target.write_bytes(b'previous complete fixture')
         self.module.BIOMART.atomic_json(Path(str(target)+'.nm_to_enst.json'),dict(mapping_identity=self.module.BIOMART.mapping_identity(self.mapping,self.inputs),artifact_bytes=target.stat().st_size,artifact_sha256=digest(target)))
@@ -113,8 +114,7 @@ def reference(args):
     values['input']=list(map(Path,values['input']));values['arguments']=(['--'] if request['command']=='run' else [])+request['arguments'];values['expected_identity']=request['expected']
     selected=SimpleNamespace(**values)
     try:
-        if request['command']=='adopt-native':result=m.adopt_native(selected,Path(request['source']),json.loads(Path(request['lineage']).read_text()))
-        elif request['command']=='context':result=m.context(selected)
+        if request['command']=='context':result=m.context(selected)
         else:result=getattr(m,request['command'])(selected)
         value=dict(success=True,value=result)
     except Exception as error:value=dict(success=False,category=type(error).__name__,message=str(error))
@@ -127,11 +127,13 @@ class Harness:
         self.args=args;self.root=args.work_root;self.root.mkdir();self.rows=[];self.counter=0
         c=self.root/'rename_fixture.c';c.write_text(SHIM);self.shim=self.root/'rename_fixture.so'
         subprocess.run(['cc','-shared','-fPIC','-O0',str(c),'-o',str(self.shim),'-ldl'],check=True)
-    def fixture(self,label,arm,kind='motifs'):
+    def fixture(self,label,arm,kind='pm1'):
         return Fixture(self.root/(f'{self.counter:03}_{label}_{arm}'),self.args.repo,self.shim,kind)
     def normalize(self,value,f):
         if not isinstance(value,str):return value
         value=value.replace(str(f.root),'<FIXTURE>')
+        # The script still has the motif kind; the command has PM1 only.
+        value=value.replace('the selected motif/PM1 scientific producer','the selected PM1 scientific producer')
         import re
         return re.sub(r'\.mapped-artifact-(motifs|pm1)-[^/\s\'"\]]+',r'.mapped-artifact-\1-<STAGE>',value)
     def invoke(self,f,command,arm,source=None,lineage=None):
@@ -148,7 +150,6 @@ class Harness:
                     for path in value:argv.extend(['--input',path])
                 elif value is not None:argv.extend(['--'+key.replace('_','-'),value])
             if command=='run':argv.extend(['--expected-identity',f.expected,'--',*f.arguments])
-            if command=='adopt-native':argv.extend(['--source',str(source),'--lineage',str(lineage)])
         result=subprocess.run(argv,env=f.env,capture_output=True,text=True)
         (f.root/('stdout_'+tag+'.log')).write_text(result.stdout);(f.root/('stderr_'+tag+'.log')).write_text(result.stderr)
         if arm=='reference':
@@ -171,7 +172,7 @@ class Harness:
         if ref['success'] and 'value' in native:passed &= ref.get('value')==native['value']
         self.rows.append(dict(name=label,passed=bool(passed),reference=ref,native=native,expected_success=success,exact_message_checked=not ref['success'] and message))
         write(self.root/'progress.json',dict(cases=len(self.rows),passed=sum(r['passed'] for r in self.rows),rows=self.rows))
-    def simple(self,label,setup=lambda f:None,*,command='run',kind='motifs',success=None,preserve=False,message=True):
+    def simple(self,label,setup=lambda f:None,*,command='run',kind='pm1',success=None,preserve=False,message=True):
         self.counter+=1;arms=[];contents=[]
         for arm in ['reference','native']:
             f=self.fixture(label,arm,kind);setup(f);before=f.pair();outside=dict(bytes=f.outside.read_bytes(),stat=f.outside.stat())
@@ -188,7 +189,7 @@ class Harness:
             arms.append(value)
         self.record(label,arms,success=success,message=message,extra=all(x['preserved'] and x['outside_unchanged'] and x.get('argv_unchanged_except_output',True) for x in arms) and (not contents or contents[0]==contents[1]))
     def basic(self):
-        for kind in ['motifs','pm1']:
+        for kind in ['pm1']:
             self.simple('cold_'+kind,kind=kind,success=True)
             self.simple('replace_'+kind,lambda f:f.complete(),kind=kind,success=True)
             self.simple('recover_absent_'+kind,command='recover',kind=kind,success=True,preserve=True)
@@ -213,10 +214,9 @@ class Harness:
         self.simple('outside_target',lambda f:f.kw.update(artifact=str(f.root/'outside_target.pkl')),success=False,preserve=True)
         self.simple('relative_root',lambda f:f.kw.update(cache_root='relative'),success=False,preserve=True)
         self.simple('unknown_assembly_run',lambda f:f.kw.update(assembly='unvalidated'),success=True)
-        self.simple('pm1_base_rejected',lambda f:f.kw.update(annotation_base=str(f.outside)),kind='pm1',success=False,preserve=True)
     def recovery(self):
         for phase in ['staged_receipt','marker','artifact','receipt']:
-            for kind in ['motifs','pm1']:
+            for kind in ['pm1']:
                 self.counter+=1;arms=[]
                 for arm in ['reference','native']:
                     f=self.fixture('interrupt_'+phase,arm,kind);f.complete();before=f.pair()
@@ -317,40 +317,6 @@ class Harness:
         self.counter+=1;f=self.fixture('context','same');arms=[self.invoke(f,'context',a) for a in ['reference','native']]
         self.record('context_exact_same_profile',arms,success=True)
 
-    def bound_cases(self):
-        alpha=load(self.args.repo/'rust/tests/alpha_annotation_base_compare.py')
-        alpha.Harness(SimpleNamespace(repo=self.args.repo,binary=self.args.binary,work_root=self.root/'bound_support'))
-        self.counter+=1;f=Fixture(self.root/(str(self.counter)+'_bound_context'),self.args.repo,self.shim,bound=True)
-        self.record('bound_context_exact',[self.invoke(f,'context',a) for a in ['reference','native']],success=True)
-        for missing in ['alphamissense_annotation_base.py','alphamissense_cache.py']:
-            self.counter+=1;arms=[]
-            for arm in ['reference','native']:
-                f=Fixture(self.root/(str(self.counter)+'_missing_asset_'+arm),self.args.repo,self.shim,bound=True)
-                (f.scripts/missing).unlink();value=self.invoke(f,'context',arm);value['normalized_message']=self.normalize(value.get('message',''),f);arms.append(value)
-            self.record('bound_missing_'+missing,arms,success=False)
-        for mutation in ['none','wide_provenance','false_provenance','schema','historical_artifact','historical_receipt','lineage_symlink']:
-            self.counter+=1;arms=[]
-            for arm in ['reference','native']:
-                f=Fixture(self.root/(str(self.counter)+'_bound_'+mutation+'_'+arm),self.args.repo,self.shim,bound=True)
-                source,lineage=f.lineage();v=json.loads(lineage.read_text());v.update(schema='priva-alphamissense-motif-input-v1',provenance={'fixture':'verified retained input'},artifact_path=str(source))
-                args=SimpleNamespace(**{k:(Path(x) if k in ['artifact','mapping','cache_root','output_dir','config','producer','annotation_base'] and x is not None else x) for k,x in f.kw.items()});args.input=f.inputs
-                with __import__('unittest').mock.patch.dict(os.environ,f.env,clear=True):v['scientific_input']=f.module.context(args)['scientific_input']
-                if mutation=='wide_provenance':v['provenance']=2**150
-                if mutation=='false_provenance':v['provenance']=False
-                if mutation=='schema':v['schema']='wrong'
-                write(lineage,v);f.kw['native_lineage']=str(lineage)
-                f.env['FIXTURE_FAIL_RENAME']=str(f.target)
-                stopped=self.invoke(f,'adopt-native',arm,source,lineage)
-                if stopped['success']:raise RuntimeError('bound adoption did not interrupt')
-                f.env.pop('FIXTURE_FAIL_RENAME');f.kw['native_lineage']=None
-                if mutation=='historical_artifact':source.write_bytes(source.read_bytes()+b'changed')
-                if mutation=='historical_receipt':Path(str(source)+'.nm_to_enst.json').write_text('{}')
-                if mutation=='lineage_symlink':
-                    kept=f.root/'lineage_saved.json';lineage.rename(kept);lineage.symlink_to(kept)
-                before=f.pair();result=self.invoke(f,'recover',arm);result['normalized_message']=self.normalize(result.get('message',''),f)
-                result['pair_unchanged']=result['success'] or before==f.pair();arms.append(result)
-            self.record('bound_recover_'+mutation,arms,success=mutation in ['none','wide_provenance'],extra=all(v['pair_unchanged'] for v in arms))
-
     def changed_mapping(self):
         for mutation in ['recover','same_mapping','run_pending']:
             self.counter+=1;arms=[]
@@ -371,48 +337,8 @@ class Harness:
                 arms.append(result)
             self.record('namespace_'+mutation,arms,success=mutation!='same_mapping',extra=all(v['selected_preserved'] and v['producer_not_repeated'] for v in arms))
 
-    def adoption_edges(self):
-        for mutation in ['pm1','lineage_null','lineage_big_hash','lineage_bad_receipt','same_source','source_symlink','source_hardlink','warm_ignored','warm_big_hash']:
-            self.counter+=1;arms=[]
-            for arm in ['reference','native']:
-                f=self.fixture('adopt_edge_'+mutation,arm,'pm1' if mutation=='pm1' else 'motifs');source,lineage=f.lineage()
-                v=json.loads(lineage.read_text())
-                if mutation=='lineage_null':v=None
-                if mutation=='lineage_big_hash':v['artifact_sha256']=2**150
-                if mutation=='lineage_bad_receipt':v['receipt_sha256']='0'*64
-                write(lineage,v)
-                if mutation=='same_source':f.kw['artifact']=str(source)
-                if mutation=='source_symlink':
-                    kept=f.root/'kept.pkl';source.rename(kept);source.symlink_to(kept)
-                if mutation=='source_hardlink':os.link(source,f.root/'linked.pkl')
-                if mutation.startswith('warm_'):
-                    first=self.invoke(f,'adopt-native','reference',source,lineage)
-                    if not first['success']:raise RuntimeError('warm source fixture did not publish')
-                    if mutation=='warm_ignored':
-                        receipt=Path(str(f.target)+'.nm_to_enst.json');r=json.loads(receipt.read_text());r['ignored']={'x':2**150,'s':'\ud800','other':[False,None,0.25]};write(receipt,r)
-                    else:v['artifact_sha256']=2**150;write(lineage,v)
-                before=f.pair();result=self.invoke(f,'adopt-native',arm,source,lineage);result['normalized_message']=self.normalize(result.get('message',''),f)
-                result['selected_preserved']=before==f.pair();arms.append(result)
-            self.record('adopt_edge_'+mutation,arms,success=mutation=='warm_ignored',extra=all(v['selected_preserved'] for v in arms))
-
-    def adoption(self):
-        for extra in ['none','bigint','surrogate','nested']:
-            self.counter+=1;arms=[];payloads=[]
-            for arm in ['reference','native']:
-                f=self.fixture('adopt_'+extra,arm);source,lineage=f.lineage()
-                if extra!='none':
-                    p=Path(str(source)+'.nm_to_enst.json');value=json.loads(p.read_text());value['ignored']={'bigint':2**150,'surrogate':'\ud800','nested':{'x':[False,None,0.25]}}[extra];write(p,value)
-                    v=json.loads(lineage.read_text());v['receipt_sha256']=digest(p);v['ignored']=value['ignored'];write(lineage,v)
-                before=[f.module.file_state(source),f.module.file_state(Path(str(source)+'.nm_to_enst.json'))]
-                value=self.invoke(f,'adopt-native',arm,source,lineage);value['normalized_message']=self.normalize(value.get('message',''),f)
-                value['history_unchanged']=before==[f.module.file_state(source),f.module.file_state(Path(str(source)+'.nm_to_enst.json'))]
-                if value['success']:
-                    payloads.append((f.target.read_bytes(),Path(str(f.target)+'.nm_to_enst.json').read_bytes()))
-                    warm=self.invoke(f,'adopt-native',arm,source,lineage);value['warm_success']=warm['success']
-                arms.append(value)
-            self.record('adopt_'+extra,arms,success=True,extra=all(v['history_unchanged'] and v.get('warm_success') for v in arms) and len(payloads)==2 and payloads[0]==payloads[1])
     def check(self):
-        self.basic();self.recovery();self.paths_and_locks();self.pending_cases();self.context_cases();self.changed_mapping();self.adoption();self.adoption_edges();self.bound_cases()
+        self.basic();self.recovery();self.paths_and_locks();self.pending_cases();self.context_cases();self.changed_mapping()
         report=dict(cases=len(self.rows),passed=sum(r['passed'] for r in self.rows),successes=sum(r['reference']['success'] for r in self.rows),rows=self.rows)
         write(self.root/'complete.json',report)
         print(json.dumps({k:v for k,v in report.items() if k!='rows'}))

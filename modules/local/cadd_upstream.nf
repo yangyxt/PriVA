@@ -1,6 +1,7 @@
 // Runs upstream CADD-scripts' own CADD.sh (its Snakemake workflow and data) on
-// one VCF, as PriVA's Calculate_CADD does. main_install replaced its prescore
-// lookup and MMSplice scripts with faster copies that write the same rows.
+// one VCF, as PriVA's CADD annotation step does. Install step E1 replaced its
+// prescore lookup and MMSplice scripts with faster copies that write the same
+// rows.
 def quoteCadd(value) { "'" + value.toString().replace("'", "'\\''") + "'" }
 
 process CADD_UPSTREAM {
@@ -14,7 +15,7 @@ process CADD_UPSTREAM {
     script:
     def base = meta.cadd_base_dir
     """
-    # Reuse main_install's genuine frontend without changing rule environments.
+    # Reuse install step E1's genuine frontend without changing rule environments.
     cadd_path=\$(python ${quoteCadd(meta.source_root + '/scripts/cadd_conda.py')} check \\
         --frontend-prefix ${quoteCadd(base + '/../conda_frontend')} --print-path)
     export PATH="\$cadd_path"

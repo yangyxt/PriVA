@@ -7,11 +7,11 @@ workflow {
         log.info '''PriVA standalone CADD: upstream CADD.sh v1.7.2 with all of CADD's own data
 nextflow run cadd.nf -c conf/cadd.config --input INPUT.vcf.gz --assembly GRCh37|GRCh38
   --cadd_base_dir CADD_SCRIPTS_DIR --outdir NEW_OUTPUT_DIRECTORY -work-dir DURABLE_WORK
-cadd_base_dir is the CADD-scripts folder prepared by main_install: CADD.sh, its
+cadd_base_dir is the CADD-scripts folder install step E1 prepared: CADD.sh, its
 data and Snakemake environments, PriVA's faster copies of its prescore lookup and
 MMSplice scripts (scripts/cadd_scripts) and the prescored position indexes.
 CADD.sh's Snakemake needs Conda >=24.7.1. PriVA discovers it on PATH, through
-CONDA_EXE, or in the adjacent conda_frontend prepared by main_install.
+CONDA_EXE, or in the adjacent conda_frontend install step E1 prepared.
 The output INPUT.cadd.tsv is the table main.nf --mode annotated accepts as --cadd.
 -stub-run writes a header-only table and runs no CADD.'''
     } else {

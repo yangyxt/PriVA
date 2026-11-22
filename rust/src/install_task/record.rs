@@ -1,4 +1,4 @@
-//! `record`: the receipt of a step that runs as its own Nextflow process
+//! `record`: the receipt of a step, which runs as its own Nextflow process
 //! (registry `module`, `modules/local/install_steps/`).
 //!
 //! Such a step writes its results into `data/` of its task's work folder and
@@ -15,9 +15,10 @@
 //! writes `receipt.json` naming each key where storeDir moves it when the
 //! task succeeds: `data/PATH` becomes `FOLDER/data/PATH`. A key given as a
 //! file staged into the task (a file you supply, kept as it is) names that
-//! file's own path. The receipt has the fields `install-task run` writes, so
-//! the steps after it, publish and adopt read it the same way; its content is
-//! the same listing of `data/` (`content.rs`).
+//! file's own path. The receipt has the fields the shell runner's receipts
+//! had (`schema`, `keys`, `shipped`, `files`, `inputs`, ...), so the steps
+//! after it, publish and adopt read it the same way; its content is the
+//! listing of `data/` (`content.rs`).
 //!
 //! The files under `data/` are made read-only. The folders stay writable:
 //! storeDir moves `data/` into the step's folder with `mv`, and a read-only
@@ -30,10 +31,9 @@
 //! string of such a file that starts with this task's `data/` path to the
 //! same path under `FOLDER/data/`, before the content is hashed.
 //!
-//! `--stub` writes `data/stub/KEY` for every output key not given, as
-//! `install-task run --stub` does.
+//! `--stub` writes `data/stub/KEY` for every output key not given.
 use super::content;
-use super::run::receipt_content;
+use super::publish::receipt_content;
 use super::{
     Options, Result, absolute, fail, hostname, now_iso, object, pretty, read_json, realpath_m,
     step, steps, string, strings, text, truthy, write_file,
@@ -53,7 +53,7 @@ pub(crate) fn record(options: &Options) -> Result<()> {
     let entry = step(&registry, &id)?;
     if entry.get("module").and_then(Json::as_str).is_none() {
         return Err(fail(format!(
-            "step {id} runs installer functions (install-task run), not its own process"
+            "step {id} names no module (modules/local/install_steps/)"
         )));
     }
     if plan.get("steps").and_then(|s| s.get(&id)).is_none() {
@@ -135,8 +135,8 @@ pub(crate) fn record(options: &Options) -> Result<()> {
     }
 
     // Outputs that lie in the source tree and outside the step's folder are
-    // files shipped with the repository (install-task run's receipt_keys
-    // reads them back).
+    // files shipped with the repository (publish's receipt_keys reads them
+    // back).
     let tree = realpath_m(&root);
     let mut shipped = Vec::new();
     for (key, _, value) in &keys {
@@ -177,9 +177,9 @@ pub(crate) fn record(options: &Options) -> Result<()> {
         }
     }
 
-    // As install-task run: only a step that others need keys them by content.
-    // The listing names this task's data folder as "own", as run names the
-    // step's folder, so the same results give the same content either way.
+    // Only a step that others need keys them by content. The listing names
+    // this task's data folder as "own", as the shell runner named the step's
+    // folder, so the same results give the same content either way.
     let needed = steps(&registry)?
         .iter()
         .any(|s| strings(s, "needs").iter().any(|n| *n == id));
@@ -297,7 +297,7 @@ fn destination(path: &Path, here: &Path, folder: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-/// The identity `install-task run` records (`PATH SIZE MTIME`), with the path
+/// The identity the shell runner recorded (`PATH SIZE MTIME`), with the path
 /// the file will have: storeDir's `mv` keeps its size and modification time.
 fn moved_identity(path: &Path, value: &Path) -> String {
     match std::fs::metadata(path) {

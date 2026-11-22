@@ -1,7 +1,7 @@
 use super::*;
 use crate::python_path::{metadata as stat_path, os_error, repr};
-use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::ExitStatusExt;
 use std::process::Command;
@@ -229,7 +229,7 @@ impl Context {
             "Selected mapping changed before generation",
         )?;
         if lexists(&suffix(&target, ".publish.pending.json"))? {
-            return self.finish(&target, &self.recovery_context(&target)?);
+            return self.finish(&target, &self.expected()?);
         }
         if lexists(&target)? || lexists(&suffix(&target, ".nm_to_enst.json"))? {
             self.receipt_check(&target)?;
@@ -344,113 +344,6 @@ impl Context {
             "Another pending publication exists",
         )?;
         rename(&temporary, &suffix(&target, ".publish.pending.json"))?;
-        self.finish(&target, &expected)
-    }
-    pub(super) fn adopt(&self, source: &Path, lineage: Value<'_>) -> Result<()> {
-        let target = self.target()?;
-        require(
-            resolve(source)? != resolve(&target)?,
-            "Native motif adoption must select a new managed target",
-        )?;
-        require(
-            !symlink(source)? && is_file(source)?,
-            "Preserved native motif must be an independent regular file",
-        )?;
-        mkdir(target.parent().unwrap())?;
-        let _lock = lock(target.parent().unwrap())?;
-        let expected = self.expected()?;
-        require_equal(
-            lineage.get("scientific_input")?,
-            optional(&expected, "scientific_input")?,
-            "Preserved native motif base/producer binding differs",
-        )?;
-        if lexists(&suffix(&target, ".publish.pending.json"))? {
-            return self.finish(&target, &expected);
-        }
-        if lexists(&target)? || lexists(&suffix(&target, ".nm_to_enst.json"))? {
-            self.receipt_check(&target)?;
-            let encoded = read_text(&suffix(&target, ".nm_to_enst.json"))?;
-            let completed = Value::validate(&encoded)?;
-            require(
-                completed
-                    .get("scientific_input")?
-                    .equal(optional(&expected, "scientific_input")?)?
-                    && completed
-                        .get("native_input_lineage")?
-                        .equal(optional(&expected, "native_input_lineage")?)?
-                    && lineage
-                        .get("artifact_sha256")?
-                        .equal(&completed.get("artifact_sha256")?.json()?)?,
-                "Native adoption must not replace an existing artifact or historical receipt",
-            )?;
-            return Ok(());
-        }
-        self.receipt_check(source)?;
-        let source_before = file_state(source)?;
-        let receipt_before = file_state(&suffix(source, ".nm_to_enst.json"))?;
-        let encoded = read_text(&suffix(source, ".nm_to_enst.json"))?;
-        let original = Value::validate(&encoded)?;
-        for key in ["mapping_identity", "artifact_bytes", "artifact_sha256"] {
-            require(
-                lineage.get(key)?.equal(&original.get(key)?.json()?)?,
-                "Preserved native motif identity differs",
-            )?;
-        }
-        require_equal(
-            lineage.get("receipt_sha256")?,
-            get(&receipt_before, "sha256")?,
-            "Preserved native receipt SHA256 differs",
-        )?;
-        let stage_path = stage(target.parent().unwrap(), ".mapped-artifact-motifs-")?;
-        let staged = stage_path.join(target.file_name().unwrap_or_default());
-        let mut input = File::open(source).map_err(|e| os_error(e, source, None))?;
-        let mut output = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&staged)
-            .map_err(|e| os_error(e, &staged, None))?;
-        let mut buffer = vec![0; 8 * 1024 * 1024];
-        loop {
-            let count = input
-                .read(&mut buffer)
-                .map_err(|e| os_error(e, source, None))?;
-            if count == 0 {
-                break;
-            }
-            output
-                .write_all(&buffer[..count])
-                .map_err(|e| os_error(e, &staged, None))?;
-        }
-        drop(output);
-        drop(input);
-        let staged_state = file_state(&staged)?;
-        require(
-            equal(
-                get(&staged_state, "sha256")?,
-                get(&source_before, "sha256")?,
-            ) && equal(&file_state(source)?, &source_before)
-                && equal(
-                    &file_state(&suffix(source, ".nm_to_enst.json"))?,
-                    &receipt_before,
-                ),
-            "Preserved native motif changed while copying",
-        )?;
-        biomart::atomic_json(
-            &suffix(&staged, ".nm_to_enst.json"),
-            &artifact_record(&expected, &staged_state)?,
-        )?;
-        require(
-            equal(&self.expected()?, &expected),
-            "Native motif inputs changed before publication",
-        )?;
-        let value = publication(
-            &target,
-            &stage_path,
-            expected.clone(),
-            object([("artifact", Json::Null), ("receipt", Json::Null)]),
-            &staged,
-        )?;
-        biomart::atomic_json(&suffix(&target, ".publish.pending.json"), &value)?;
         self.finish(&target, &expected)
     }
 }

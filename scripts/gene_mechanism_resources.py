@@ -186,9 +186,8 @@ class GeneMechanismHub:
         if not self.condition_cache.is_file():
             raise FileNotFoundError(
                 "Integrated HPO condition-mechanism cache not found: "
-                f"{self.condition_cache}. Run "
-                "`bash scripts/install_utils.sh "
-                "hpo_condition_mechanism_cache_install config.yaml`."
+                f"{self.condition_cache}. Build it with install step F9 "
+                "(`nextflow run main.nf --action install`)."
             )
 
         with open_text(self.condition_cache) as handle:

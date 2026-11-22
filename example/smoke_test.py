@@ -178,30 +178,29 @@ def run_steps(path: Path) -> None:
     shutil.copyfile(config["input_vcf"], vcf)
     shutil.copyfile(config["input_vcf"] + ".tbi", f"{vcf}.tbi")
     shutil.copyfile(config["hub_cadd_file"], cadd)
-    filtration = str(ROOT / "scripts/filtration_vcf_per_fam.sh")
-    prioritization = str(ROOT / "scripts/prioritization_vcf_per_fam.sh")
     filtered_vcf, filtered_cadd = f"{out}.filtered.vcf.gz", f"{out}.filtered.cadd.tsv"
-    threads = str(config["threads_per_fam"])
+    priva = os.environ.get("PRIVA_BINARY") or shutil.which("priva")
+    step = [priva, "task", "step", "--root", str(ROOT), "--config", str(path), "--step"]
     steps = [
         # 2. Filtration without a family (the fixtures have no pedigree).
-        ["bash", filtration, "main_filtration", "-v", str(vcf), "-c", str(path)],
+        step + ["filtration", "--vcf", str(vcf)],
         # 3. Prioritization: the combined table, kept as .prepared.tsv for
         # validate(), then ACMG assignment and ranking.
-        ["bash", prioritization, "prepare_combined_tab", filtered_vcf, filtered_cadd, threads, str(path)],
+        step + ["combine", "--vcf", filtered_vcf, "--cadd", filtered_cadd],
         ["cp", "--", f"{out}.filtered.tsv", f"{out}.prepared.tsv"],
-        ["bash", prioritization, "main_prioritization", "-i", filtered_vcf, "-t", filtered_cadd, "-c", str(path)],
+        step + ["prioritization", "--vcf", filtered_vcf, "--cadd", filtered_cadd],
     ]
     for command in steps:
         subprocess.run(command, check=True, cwd=path.parent)
 
 
 def run(args) -> None:
-    for tool in ("bash", "python", "yq", "bcftools", "tabix"):
+    for tool in ("yq", "bcftools", "tabix"):
         if not shutil.which(tool):
             raise ValueError(f"Activate the PriVA environment; missing executable: {tool}")
-    # The pipeline scripts run the converted steps with the priva program.
+    # The steps run in the priva program (`priva task step`).
     if not (os.environ.get("PRIVA_BINARY") or shutil.which("priva")):
-        raise ValueError("Set PRIVA_BINARY to the priva program (main_install saves its path as priva_binary) "
+        raise ValueError("Set PRIVA_BINARY to the priva program (the install records its path as priva_binary) "
                          "or put priva on PATH.")
     path = prepare(args)
     print(f"Prepared-fixture smoke test: {path}", flush=True)

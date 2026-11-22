@@ -16,40 +16,6 @@ sys.path.insert(0, str(SCRIPTS))
 import determine_phase  # noqa: E402
 
 
-def _main_block(tree: ast.Module) -> ast.If:
-    for node in tree.body:
-        if isinstance(node, ast.If) and "__main__" in ast.unparse(node.test):
-            return node
-    raise AssertionError("acmg_criteria_assign.py has no __main__ block")
-
-
-class Pp1CommandLineTest(unittest.TestCase):
-    def test_acmg_command_line_accepts_and_forwards_the_pp1_inputs(self) -> None:
-        shell = (SCRIPTS / "prioritization_vcf_per_fam.sh").read_text(encoding="utf-8")
-        self.assertIn('--pp1_vcf ${pp1_vcf} --pp1_ped ${pp1_ped}', shell)
-
-        tree = ast.parse((SCRIPTS / "acmg_criteria_assign.py").read_text(encoding="utf-8"))
-        main = _main_block(tree)
-        options = {
-            call.args[0].value
-            for call in ast.walk(main)
-            if isinstance(call, ast.Call)
-            and ast.unparse(call.func) == "parser.add_argument"
-            and call.args
-            and isinstance(call.args[0], ast.Constant)
-        }
-        self.assertLessEqual({"--pp1_vcf", "--pp1_ped"}, options)
-
-        (assign_call,) = [
-            call
-            for call in ast.walk(main)
-            if isinstance(call, ast.Call) and ast.unparse(call.func) == "ACMG_criteria_assign"
-        ]
-        forwarded = {keyword.arg: ast.unparse(keyword.value) for keyword in assign_call.keywords}
-        self.assertEqual(forwarded.get("pp1_vcf"), "args.pp1_vcf")
-        self.assertEqual(forwarded.get("pp1_ped"), "args.pp1_ped")
-
-
 class _PoolReturningGenesInReverse:
     """Stands in for multiprocessing.Pool: imap keeps the order, imap_unordered reverses it."""
 

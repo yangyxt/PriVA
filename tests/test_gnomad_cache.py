@@ -73,19 +73,6 @@ class GnomadFamilyTests(unittest.TestCase):
     def snapshot(self):
         return {path: (CACHE.identity(path), path.read_bytes()) for path in self.source.iterdir()}
 
-    def shell(self):
-        body = r'''
-source "$1"
-read_yaml() { "$TEST_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2], ""))' "$1" "$2"; }
-update_yaml() { printf 'UNEXPECTED_UPDATE\n'; return 98; }
-wget() { printf 'UNEXPECTED_NETWORK\n'; return 98; }
-gnomAD_liftover() { printf 'UNEXPECTED_LIFTOVER\n'; return 98; }
-gnomAD_install "$TEST_CONFIG" "$TEST_REFERENCE"
-'''
-        return subprocess.run(["bash", "--noprofile", "--norc", "-c", body, "fixture", str(ROOT / "scripts/install_utils.sh")],
-            env=dict(os.environ, TEST_PYTHON=sys.executable, TEST_CONFIG=str(self.config), TEST_REFERENCE=str(self.reference),
-                     **fake_priva_binary.environment(self.folder)),
-            capture_output=True, text=True, timeout=30)
 
     def test_complete_family_checks_headers_indexes_and_leaves_all_source_bytes_unchanged(self):
         before = self.snapshot()
@@ -94,34 +81,6 @@ gnomAD_install "$TEST_CONFIG" "$TEST_REFERENCE"
         self.assertFalse(result["scientific_acceptance"])
         self.assertEqual(self.snapshot(), before)
 
-    def test_selected_grch37_family_is_reused_without_download_liftover_or_relabeling(self):
-        self.write_family("hg19")
-        self.settings["assembly"] = "GRCh37"
-        self.config.write_text(json.dumps(self.settings))
-        before, configured = self.snapshot(), self.config.read_bytes()
-        result = self.shell()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertNotIn("UNEXPECTED", result.stdout)
-        self.assertEqual(self.snapshot(), before)
-        self.assertEqual(self.config.read_bytes(), configured)
-
-    def test_missing_custom_member_or_index_fails_without_network(self):
-        for member in (self.family["chr2"], Path(str(self.family["chrY"]) + ".tbi")):
-            with self.subTest(member=member):
-                saved = member.read_bytes()
-                member.unlink()
-                result = self.shell()
-                self.assertNotEqual(result.returncode, 0)
-                self.assertNotIn("UNEXPECTED", result.stdout)
-                member.write_bytes(saved)
-
-    def test_custom_filename_must_support_the_existing_caller_template(self):
-        self.settings["gnomad_vcf_chrX"] = str(self.source / "renamed.vcf.bgz")
-        self.config.write_text(json.dumps(self.settings))
-        result = self.shell()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(".chrX.vcf", result.stderr)
-        self.assertNotIn("UNEXPECTED", result.stdout)
 
     def test_missing_required_joint_field_is_rejected(self):
         self.write_member("chr2", missing_info="AF_joint_nfe_XX")

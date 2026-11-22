@@ -39,7 +39,8 @@ has no explicit row-level mechanism field.
 ## Workflow
 
 The whole pipeline is `scripts/build_gofcards_exact_gof_cache.py`, deployed by
-`gofcards_exact_gof_cache_install` in `scripts/install_utils.sh`. Seven steps,
+install step F5 (`modules/local/install_steps/gofcards_exact_gof.nf`, through its
+port `priva gofcards-exact-gof`). Seven steps,
 one function each:
 
 | Step | Function | Job |

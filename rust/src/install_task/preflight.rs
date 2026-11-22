@@ -1,8 +1,8 @@
 //! preflight: priva's checks of what an installation needs, run once after
 //! the plan and before any step (`INSTALL_PREFLIGHT` in
 //! `modules/local/install.nf`), so a missing publisher file stops the run at
-//! once instead of after hours of downloads, as `main_install` stops before
-//! its first resource:
+//! once instead of after hours of downloads, as the removed shell installer's
+//! `main_install` stopped before its first resource:
 //!
 //! - each file you supply (registry `user_inputs`) for a step that will run:
 //!   a set path must be an absolute path to a completed, nonempty, readable

@@ -161,31 +161,6 @@ module.write_conda(pathlib.Path(sys.argv[sys.argv.index('--prefix')+1]))
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertTrue((frontend / "bin/conda").is_file())
 
-    def test_main_stops_before_annotation_when_frontend_is_incomplete(self):
-        write_conda(self.frontend, activate=False)
-        config = self.root / "config.yaml"
-        config.write_text("fixture: true\n")
-        shell = '''source "$1" >/dev/null 2>&1 || exit
-priva_install_basic_paths() { PRIVA_INSTALL_TMPDIR="$TEST_ROOT"; }
-conda_install_vep() { PRIVA_INSTALL_ENV_NAME=priva_acmg; }
-priva_cache_install_begin() { PRIVA_CACHE_INSTALL_BUILD_CONFIG=$2; }
-priva_manual_cache_inputs() { :; }
-priva_prepare_install_config() { :; }
-bundled_snapshot_install() { :; }
-priva_find_env_manager() { PRIVA_ENV_MANAGER="$TEST_MANAGER"; }
-read_yaml() { printf '%s' "$TEST_PARENT"; }
-reference_genome_install() { printf 'UNEXPECTED_ANNOTATION'; }
-main_install "$2"
-'''
-        env = dict(self.env, PATH=self.env["PATH"] + ":/usr/bin:/bin", TEST_ROOT=str(self.root),
-                   TEST_PARENT=str(self.frontend.parent), TEST_MANAGER=str(self.manager))
-        result = subprocess.run(["/bin/bash", "-c", shell, "bash",
-                                 str(ROOT / "scripts/install_utils.sh"), str(config)],
-                                env=env, capture_output=True, text=True, timeout=30)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("retained without modification", result.stderr)
-        self.assertNotIn("UNEXPECTED_ANNOTATION", result.stdout)
-        self.assertFalse((self.root / "manager.json").exists())
 
     def test_condabin_can_replace_old_path_conda_without_shadowing_python(self):
         old = write_conda(self.root / "old", "23.9.0")
@@ -198,21 +173,6 @@ main_install "$2"
         self.assertEqual(Path(shutil.which("conda", path=result["path"])).resolve(), executable)
         self.assertEqual(shutil.which("conda", path=result["path"]), result["executable"])
         self.assertEqual(shutil.which("python", path=result["path"]), str(self.tools / "python"))
-
-    def test_shell_routing_keeps_python_and_original_conda_only_cadd_contract(self):
-        executable = write_conda(self.frontend)
-        shell = '''source "$1" >/dev/null 2>&1 || exit
-priva_cadd_conda check --frontend-prefix "$2" || exit
-command -v conda
-command -v python
-'''
-        # Only the standard tools needed to source the shell function pool.
-        env = dict(self.env, PATH=self.env["PATH"] + ":/usr/bin:/bin")
-        result = subprocess.run(["/bin/bash", "-c", shell, "bash",
-                                 str(ROOT / "scripts/install_utils.sh"), str(self.frontend)],
-                                env=env, capture_output=True, text=True, timeout=30)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.splitlines(), [str(executable), str(self.tools / "python")])
 
 
 if __name__ == "__main__":

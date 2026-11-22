@@ -171,7 +171,7 @@ fn software_readiness(mode: &str, priva_binary: Option<&Path>) -> Result<Json> {
         }
     }
     if let Some(binary) = priva_binary {
-        // The same check as priva_resolve_binary in scripts/common_bash_utils.sh.
+        // The check the removed shell glue's priva_resolve_binary made.
         let output = Command::new(binary)
             .arg("--version")
             .stdin(Stdio::null())
@@ -595,8 +595,9 @@ fn task_thread_settings(
             settings.push((key.to_owned(), setting(key).0));
         }
     }
-    // VEP runs in the whole raw annotation and in its own step. The other
-    // annotation steps, and annotated mode's import, need no CPU minimum.
+    // VEP runs in its own step; launch checks raw mode's annotation CPUs the
+    // same way. The other annotation steps, and annotated mode's import,
+    // need no CPU minimum.
     let vep = phase == "annotation-vep" || (phase == "annotation" && mode == "raw");
     if phase.starts_with("annotation") && !vep {
         return Ok(settings);
@@ -942,10 +943,16 @@ pub(crate) fn run(options: &Options) -> Result<()> {
             ));
         }
     }
-    // One function of the annotation script per task; only raw mode runs them.
+    // Raw mode annotates one step per task; the whole-annotation phase only
+    // imports an already annotated VCF.
     let step = phase.strip_prefix("annotation-");
     if step.is_some() && field("mode") != "raw" {
         return refuse("Annotation steps run only in raw mode");
+    }
+    if phase == "annotation" && field("mode") == "raw" {
+        return refuse(
+            "Raw annotation runs one step per task (annotation-preprocess to annotation-merge)",
+        );
     }
     match (&family, phase) {
         (Some(_), annotation) if annotation.starts_with("annotation") => {
@@ -1088,9 +1095,7 @@ pub(crate) fn run(options: &Options) -> Result<()> {
             .find(|(k, _)| k == "priva_binary")
             .map(|(_, p)| display(p))
             .unwrap_or_default();
-        let script = |name: &str| display(&root.join("scripts").join(name));
         let input = display(&input_vcf);
-        let config_text = display(&config_path);
         let threads = cpus.to_string();
         let temp_text = display(&temp);
         // The pinned program, whatever PRIVA_BINARY the caller exported.
@@ -1119,14 +1124,12 @@ pub(crate) fn run(options: &Options) -> Result<()> {
         };
         let cadd_text = cadd_path.as_deref().map(display).unwrap_or_default();
         let anno = |suffix: &str| display(&result.join(format!("{base}.anno{suffix}")));
-        let command: Option<Vec<String>> = match phase {
+        match phase {
             "annotation-preprocess" => {
                 crate::pipeline_steps::preprocess::run(&steps, &input, &anno(".vcf.gz"))?;
-                None
             }
             "annotation-cadd" => {
                 crate::pipeline_steps::cadd::run(&steps, &input, &anno(".cadd.tsv"))?;
-                None
             }
             "annotation-merge" => {
                 let mut steps = Vec::new();
@@ -1144,35 +1147,27 @@ pub(crate) fn run(options: &Options) -> Result<()> {
                 let steps: Vec<(&str, &Path)> =
                     steps.iter().map(|(n, p)| (*n, p.as_path())).collect();
                 super::info_merge::merge(&input_vcf, &steps, &input_vcf)?;
-                None
             }
             "annotation-gnomad" => {
                 crate::pipeline_steps::gnomad::run(&steps, &input)?;
-                None
             }
             "annotation-clinvar" => {
                 crate::pipeline_steps::clinvar::run(&steps, &input)?;
-                None
             }
             "annotation-control" => {
                 crate::pipeline_steps::control::run(&steps, &input)?;
-                None
             }
             "annotation-vep" => {
                 crate::pipeline_steps::vep::run(&steps, &input)?;
-                None
             }
             "prioritization-combine" => {
                 crate::pipeline_steps::family::combine(&steps, &input, &cadd_text)?;
-                None
             }
             "prioritization-splicing" => {
                 crate::pipeline_steps::family::splicing(&steps, &input)?;
-                None
             }
             "prioritization-utr" => {
                 crate::pipeline_steps::family::utr(&steps, &input)?;
-                None
             }
             "prioritization-join" => {
                 let (Some(splicing), Some(utr)) = (
@@ -1187,25 +1182,13 @@ pub(crate) fn run(options: &Options) -> Result<()> {
                     Path::new(utr),
                     &input_vcf,
                 )?;
-                None
             }
             "prioritization-acmg" => {
                 crate::pipeline_steps::family::acmg(&steps, &input, family.as_deref())?;
-                None
             }
-            "annotation" if field("mode") == "raw" => Some(vec![
-                "bash".into(),
-                script("annotation_vcf.sh"),
-                "main_workflow".into(),
-                "-i".into(),
-                input.clone(),
-                "--config".into(),
-                config_text.clone(),
-            ]),
             // Without a family the steps run their no-pedigree mode.
             "filtration" => {
                 crate::pipeline_steps::family::filtration(&steps, &input, family.as_deref())?;
-                None
             }
             "prioritization" => {
                 crate::pipeline_steps::family::prioritize(
@@ -1214,19 +1197,8 @@ pub(crate) fn run(options: &Options) -> Result<()> {
                     &cadd_text,
                     family.as_deref(),
                 )?;
-                None
             }
-            _ => None, // An explicit preannotated import keeps the input bytes.
-        };
-        if let Some(command) = command {
-            let status = Command::new(&command[0])
-                .args(&command[1..])
-                .envs(env.iter().map(|(k, v)| (k, v)))
-                .status()?;
-            if !status.success() {
-                let parts: Vec<&str> = command.iter().map(String::as_str).collect();
-                return Err(called_process_error(&parts, status));
-            }
+            _ => {} // An explicit preannotated import keeps the input bytes.
         }
     }
     let suffixes: &[&str] = match phase {

@@ -1,28 +1,25 @@
-//! Native `scripts/clinvar_gene_refresh.py`: the three-calendar-month ClinVar
-//! gene-statistics refresh, the locked ClinVar annotation deployment with its
-//! retained generations, and the unqualified installation-candidate receipts.
+//! `priva clinvar-gene-refresh`: the checks of the ClinVar install steps,
+//! ported from `scripts/clinvar_gene_refresh.py` (removed in phase 7).
 //!
-//! The eleven subcommands of the script take its options, and `download` is
-//! the install workflow's ClinVar download step (native only); the subcommand comes
-//! first. Printed JSON, receipts, journals, retained members, configuration
-//! rewrites and exit statuses follow the script. A failure that the script
-//! reported as `ERROR: ClinVar gene-statistics refresh failed: message` exits 1
-//! here as `priva: CATEGORY: message`, the category being the Python exception
-//! class. The original scientific stages still run as
-//! `bash scripts/install_utils.sh FUNCTION ...`, and `curl` replaces urllib
-//! for the NCBI requests (same headers, Range, redirects and HTTP errors).
+//! - `download` (step D0) asks NCBI for the latest ClinVar release of the
+//!   install's assembly, with the policy of `cache_resources.json`, and
+//!   downloads it with `curl` (the script's headers, Range, redirects and HTTP
+//!   errors), checking the publisher's MD5.
+//! - `check-header` (step D1) checks the VEP release and assembly in the
+//!   header of the annotated ClinVar VCF the configuration names.
+//! - `due` (step D1) says whether the selected ClinVar gene statistics stay
+//!   or are rebuilt from the downloaded release (`due.rs`).
 //!
-//! The scientific profile binds the Python runtime the script ran in
-//! (`sys.executable`, `sys.version` and the selected `sys.prefix/conda-meta`
-//! records), so that its signature, and the refresh workspace it names, stay
-//! those of the script and of `vep_chromosome_jobs.py`. That runtime is
-//! observed once with `python -c` from PATH, as `alpha-annotation-base
-//! motif-runtime` observes its environment; nothing else runs in Python.
-//! Differences: temporary file and folder names carry six random characters.
+//! A failure that the script reported as `ERROR: ClinVar gene-statistics
+//! refresh failed: message` exits 1 here as `priva: CATEGORY: message`, the
+//! category being the Python exception class. The script's other commands
+//! (the refresh plan and install, the locked deployment and its retained
+//! generations, and the annotation candidate receipts) ran the shell
+//! installer's ClinVar functions or served `annotation_vcf.sh`, and went with
+//! them.
 mod deploy;
 mod due;
-mod profile;
-mod refresh;
+mod policy;
 mod remote;
 
 use crate::alpha_annotation_base::io::{path as json_path, type_name};
@@ -42,35 +39,16 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+/// The `kind` of the receipt the download step writes (`inputs.ready.json`).
 const RECEIPT_KIND: &str = "priva_clinvar_gene_statistics_refresh_v1";
-const CANDIDATE_KIND: &str = "priva_clinvar_annotation_candidate_v1";
 const HELP: &str = "usage: priva clinvar-gene-refresh COMMAND [options]\n\
-       {plan,install,deploy,retire-owned,retire-shards,check-header} --config CONFIG --source-root ROOT\n\
-       plan [--output OUTPUT]; deploy|retire-owned [--source-vcf VCF]\n\
-       retire-shards --input-vcf VCF --chromosome CHROM [--chromosome CHROM ...]\n\
-       acquire --plan PLAN --output OUTPUT\n\
        download --config CONFIG --source-root ROOT --output FOLDER\n\
-       file-date --input ANNOTATED_VCF\n\
-       candidate-route --source-root ROOT\n\
+       check-header --config CONFIG --source-root ROOT\n\
        due --config CONFIG --source-root ROOT\n\
-       {candidate-begin,candidate-complete} --config CONFIG --source-root ROOT --input-vcf VCF\n\
-Refresh ClinVar gene statistics after three calendar months of source-data age; the\n\
-outputs and exit statuses of scripts/clinvar_gene_refresh.py. The subcommand comes first.";
-const COMMANDS: [&str; 13] = [
-    "plan",
-    "install",
-    "deploy",
-    "retire-owned",
-    "retire-shards",
-    "check-header",
-    "acquire",
-    "download",
-    "file-date",
-    "candidate-route",
-    "candidate-begin",
-    "candidate-complete",
-    "due",
-];
+The ClinVar install steps' checks: download (D0) acquires the latest ClinVar release;\n\
+check-header (D1) checks the annotated release's VEP header; due (D1) says whether the\n\
+ClinVar gene statistics stay or are rebuilt. The subcommand comes first.";
+const COMMANDS: [&str; 3] = ["download", "check-header", "due"];
 
 fn error(category: &'static str, message: impl Into<String>) -> Box<dyn std::error::Error> {
     builder_error::category(category, invalid(message))
@@ -243,11 +221,6 @@ fn load_config(path: &str) -> Result<Json> {
     )?;
     Ok(yaml_json(&doc, doc.root, 0))
 }
-/// `yaml.safe_load(text)` of one configuration value.
-fn safe_load(text: &str) -> Result<Json> {
-    let doc = yaml::load(text)?;
-    Ok(yaml_json(&doc, doc.root, 0))
-}
 /// `{"hg19": "GRCh37", ...}.get(config.get("assembly"))`
 fn assembly_of(value: &Json) -> Result<Option<&'static str>> {
     if matches!(value, Json::Array(_) | Json::Object(_)) {
@@ -314,9 +287,6 @@ fn read_json(path: &str) -> Result<Json> {
 fn stat(path: &str) -> Result<fs::Metadata> {
     fs::metadata(path).map_err(|e| os_error(e, Path::new(path), None))
 }
-fn lstat(path: &str) -> Result<fs::Metadata> {
-    fs::symlink_metadata(path).map_err(|e| os_error(e, Path::new(path), None))
-}
 fn nanoseconds(seconds: i64, nanos: i64) -> i128 {
     seconds as i128 * 1_000_000_000 + nanos as i128
 }
@@ -341,14 +311,6 @@ fn identity_with(path: &str, extra: Vec<(&str, Json)>) -> Result<Json> {
     value.set("sha256", string(sha256(path)?));
     Ok(value)
 }
-fn identity(path: &str) -> Result<Json> {
-    identity_with(path, Vec::new())
-}
-/// `os.path.samefile`-style comparison through `os.stat`.
-fn same_file(left: &str, right: &str) -> Result<bool> {
-    let (a, b) = (stat(left)?, stat(right)?);
-    Ok(a.dev() == b.dev() && a.ino() == b.ino())
-}
 /// `tempfile.mkstemp(prefix=prefix, dir=parent)`: an empty 0600 file.
 fn mkstemp(parent: &str, prefix: &str) -> Result<(File, String)> {
     let template = tempfile_parent(Path::new(parent))?.join(format!("{prefix}XXXXXX"));
@@ -361,14 +323,6 @@ fn mkstemp(parent: &str, prefix: &str) -> Result<(File, String)> {
         return Err(os_error(io::Error::last_os_error(), &path, None));
     }
     Ok((unsafe { File::from_raw_fd(fd) }, path.display().to_string()))
-}
-/// `tempfile.mkdtemp(prefix=prefix, dir=parent)`
-fn mkdtemp(parent: &str, prefix: &str) -> Result<String> {
-    Ok(
-        crate::alpha_annotation_base::io::stage(Path::new(parent), prefix)?
-            .display()
-            .to_string(),
-    )
 }
 fn mkdirs(path: &str) -> Result<()> {
     fs::create_dir_all(path).map_err(|e| os_error(e, Path::new(path), None))
@@ -538,36 +492,15 @@ fn float_timestamp(seconds: i64, nanos: i64) -> (i128, u32) {
 
 fn options(command: &str) -> (Vec<&'static str>, Vec<&'static str>) {
     match command {
-        "acquire" => (vec!["plan", "output"], vec!["plan", "output"]),
         "download" => (
             vec!["config", "source-root", "output"],
             vec!["config", "source-root", "output"],
         ),
-        "file-date" => (vec!["input"], vec!["input"]),
-        "candidate-route" => (vec!["source-root"], vec!["source-root"]),
-        "candidate-begin" | "candidate-complete" => (
-            vec!["config", "source-root", "input-vcf"],
-            vec!["config", "source-root", "input-vcf"],
-        ),
-        _ => {
-            let mut names = vec!["config", "source-root"];
-            let required = names.clone();
-            match command {
-                "plan" => names.push("output"),
-                "deploy" | "retire-owned" => names.push("source-vcf"),
-                "retire-shards" => names.extend(["input-vcf", "chromosome"]),
-                _ => {}
-            }
-            let mut required = required;
-            if command == "retire-shards" {
-                required.extend(["input-vcf", "chromosome"]);
-            }
-            (names, required)
-        }
+        _ => (vec!["config", "source-root"], vec!["config", "source-root"]),
     }
 }
 
-fn run(command: &str, values: &HashMap<String, String>, chromosomes: Vec<String>) -> Result<()> {
+fn run(command: &str, values: &HashMap<String, String>) -> Result<()> {
     let path = |name: &str| values.get(name).map(|value| pathlib(value));
     let config = path("config").unwrap_or_default();
     let root = path("source-root").unwrap_or_default();
@@ -576,67 +509,16 @@ fn run(command: &str, values: &HashMap<String, String>, chromosomes: Vec<String>
         Ok(())
     };
     match command {
-        "deploy" => deploy::deploy_cache(&config, &root, path("source-vcf").as_deref()),
-        "retire-owned" => deploy::retire_owned_cache(
-            &config,
-            "existing deployment requires a cold annotation rebuild",
-            path("source-vcf").as_deref(),
-            None,
-            &[],
-        )
-        .map(|_| ()),
-        "retire-shards" => deploy::retire_rebuilt_shards(
-            &config,
-            &path("input-vcf").unwrap_or_default(),
-            &chromosomes,
-        )
-        .map(|_| ()),
         "check-header" => printed(&deploy::deployment_header(
             &deploy::deployment_context(&config)?,
             None,
         )?),
-        "candidate-route" => printed(&profile::candidate_route(&root)?),
         "due" => printed(&due::due(&config, &root)?),
-        "candidate-begin" => printed(&profile::candidate_begin(
-            &config,
-            &root,
-            &path("input-vcf").unwrap_or_default(),
-        )?),
-        "candidate-complete" => printed(&profile::candidate_complete(
-            &config,
-            &root,
-            &path("input-vcf").unwrap_or_default(),
-        )?),
-        "file-date" => {
-            println!(
-                "{}",
-                date_text(remote::local_file_date(&path("input").unwrap_or_default())?)
-            );
-            Ok(())
-        }
-        "acquire" => {
-            let plan = read_json(&path("plan").unwrap_or_default())?;
-            write_json(
-                &path("output").unwrap_or_default(),
-                &remote::acquire_inputs(&plan)?,
-            )
-        }
-        "download" => printed(&remote::download_release(
+        _ => printed(&remote::download_release(
             &config,
             &root,
             &path("output").unwrap_or_default(),
         )?),
-        "plan" => {
-            let value = refresh::plan_refresh(&config, &root)?;
-            match path("output") {
-                Some(output) => write_json(&output, &value),
-                None => {
-                    println!("{}", pretty(&value)?);
-                    Ok(())
-                }
-            }
-        }
-        _ => refresh::install_refresh(&config, &root).map(|_| ()),
     }
 }
 
@@ -664,14 +546,9 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         println!("{HELP}");
         return Ok(());
     };
-    let chromosomes: Vec<String> = occurrences
-        .iter()
-        .filter(|(name, _)| name == "chromosome")
-        .map(|(_, value)| value.clone())
-        .collect();
     let values: HashMap<String, String> = occurrences.into_iter().collect();
     crate::python_args::require_options(&values, &required).map_err(invalid)?;
-    let result = builder_error::finish(run(command, &values, chromosomes));
+    let result = builder_error::finish(run(command, &values));
     io::stdout().flush().ok();
     result
 }

@@ -3,6 +3,10 @@
 //! own, with the arguments the shell functions gave them. `priva task run`
 //! calls them inside a Nextflow task; `priva task step` runs one by hand.
 //!
+//! The shell scripts these docs name (annotation_vcf.sh, common_bash_utils.sh,
+//! filtration_vcf_per_fam.sh, prioritization_vcf_per_fam.sh) were removed in
+//! phase 7; commit 841e200 is the last tree that has them.
+//!
 //! One file per step, and the files they share (`tools`), so that a step's
 //! hub lineage, which counts the Rust files the step's own file reaches,
 //! moves only when that step's code does. Nothing here names this file's

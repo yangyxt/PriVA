@@ -6,12 +6,10 @@ There is exactly one deployed GoFCards cache, and it already carries its ClinVar
 conditions. It is built in two steps, the first of which writes a build
 intermediate rather than a second deliverable:
 
-| Step | Script | Writes |
+| Install step | Program (ported from) | Writes |
 | --- | --- | --- |
-| `gofcards_exact_gof_cache_install` | `scripts/build_gofcards_exact_gof_cache.py` | `<gofcards_workdir>/gofcards_exact_gof.normalized.json.gz` (intermediate) |
-| `gofcards_clinvar_injection_install` | `scripts/inject_clinvar_into_gofcards.py` | `data/gofcards/gofcards_exact_gof.json.gz` (deployed) |
-
-Both are functions in `scripts/install_utils.sh`.
+| F5 (`modules/local/install_steps/gofcards_exact_gof.nf`) | `priva gofcards-exact-gof` (`scripts/build_gofcards_exact_gof_cache.py`) | `<gofcards_workdir>/gofcards_exact_gof.normalized.json.gz` (intermediate) |
+| F7 (`modules/local/install_steps/gofcards_clinvar_injection.nf`) | `priva gofcards-clinvar-injection` (`scripts/inject_clinvar_into_gofcards.py`) | `data/gofcards/gofcards_exact_gof.json.gz` (deployed) |
 The split exists so a ClinVar refresh does not force the VEP pipeline to rerun,
 not because two caches are published.
 

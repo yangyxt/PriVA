@@ -102,7 +102,7 @@ def ensure(frontend, manager=None):
     if selected:
         return selected
     if manager is None:
-        raise ValueError("CADD.sh needs a conda executable (>= 24.7.1); run main_install or CADD_conda_install")
+        raise ValueError("CADD.sh needs a conda executable (>= 24.7.1); install step E1 (`nextflow run main.nf --action install`) sets one up")
     # A reused scientific environment may have exact package/export receipts.
     # Installing a manager into it would invalidate those receipts even if no
     # scientific package changed. Reuse the dedicated CADD frontend location.

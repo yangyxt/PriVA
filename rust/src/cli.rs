@@ -411,9 +411,6 @@ pub(crate) fn run() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("spliceai2-prepare") {
         return crate::spliceai2_prepare::dispatch(&args[2..]);
     }
-    if args.get(1).map(String::as_str) == Some("alpha-annotation-base") {
-        return crate::alpha_annotation_base::dispatch(&args[2..]);
-    }
     if args.get(1).map(String::as_str) == Some("spliceai2-install") {
         return crate::spliceai2_install::dispatch(&args[2..]);
     }

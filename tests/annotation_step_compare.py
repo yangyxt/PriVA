@@ -3,7 +3,9 @@
 
 Old: the functions of scripts/annotation_vcf.sh the annotation tasks ran up to
 phase 4, through the task's step wrapper as it ran them
-(tests/fixtures/annotation-steps-cd91ec2/annotation_step.sh). New:
+(tests/fixtures/annotation-steps-cd91ec2/annotation_step.sh). Phase 7 removed
+the scripts, so the old route takes them from a checkout of commit 841e200
+(--old-root, for example `git worktree add OLD 841e200`). New:
 `priva task step`, the Rust steps (rust/src/pipeline_steps) `priva task run`
 calls now.
 
@@ -29,7 +31,7 @@ Files a route leaves behind besides its outputs are listed: the new route
 must leave none the old one did not. Exit 1 on any difference.
 
   python3 tests/annotation_step_compare.py --priva rust/target/release/priva \\
-      --work W [--case NAME]...
+      --old-root OLD --work W [--case NAME]...
 """
 import argparse
 import gzip
@@ -505,12 +507,13 @@ def cadd_setups(work: Path) -> dict:
     return out
 
 
-def checkout(work: Path) -> Path:
-    """A checkout with copied scripts and the repository's data/ folder."""
+def checkout(work: Path, old_root: Path) -> Path:
+    """A checkout with the old route's scripts and the repository's data/
+    folder."""
     root = work / "checkout"
     if not root.exists():
         root.mkdir(parents=True)
-        shutil.copytree(ROOT / "scripts", root / "scripts")
+        shutil.copytree(old_root / "scripts", root / "scripts")
         (root / "data").symlink_to(ROOT / "data")
     return root
 
@@ -756,8 +759,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--priva", required=True)
     parser.add_argument("--work", required=True)
+    parser.add_argument("--old-root", required=True)
     parser.add_argument("--case", action="append")
     args = parser.parse_args()
+    old_root = Path(args.old_root).resolve()
+    if not (old_root / "scripts" / "annotation_vcf.sh").is_file():
+        parser.error(f"--old-root {old_root} has no scripts/annotation_vcf.sh (check out 841e200)")
     try:
         import packaging.version  # noqa: F401  (scripts/cadd_conda.py needs it)
     except ImportError:
@@ -769,7 +776,7 @@ def main() -> int:
     tools = logging_tools(work, path)
     stand_in = work / "priva"
     make_executable(stand_in, FAKE_PRIVA)
-    root = checkout(work)
+    root = checkout(work, old_root)
     inputs = build_inputs(work, priva, stand_in, tools, root, path)
     vep = vep_resources(work)
     cadd = cadd_setups(work)

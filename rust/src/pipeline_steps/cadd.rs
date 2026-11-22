@@ -275,7 +275,7 @@ fn conda_path(frontend: &Path) -> Result<String> {
         ));
     }
     refuse(
-        "ERROR: CADD.sh needs a conda executable (>= 24.7.1); run main_install or CADD_conda_install",
+        "ERROR: CADD.sh needs a conda executable (>= 24.7.1); install step E1 (`nextflow run main.nf --action install`) sets one up",
     )
 }
 
@@ -300,7 +300,7 @@ pub(crate) fn run(context: &Context, input: &str, output: &str) -> Result<()> {
     };
     if !runnable {
         return refuse(format!(
-            "CADD.sh is missing from cadd_base_dir {base}; run main_install"
+            "CADD.sh is missing from cadd_base_dir {base}; install step E1 (`nextflow run main.nf --action install`) installs it"
         ));
     }
     let path = conda_path(Path::new(&format!("{}/conda_frontend", parent_text(&base))))?;

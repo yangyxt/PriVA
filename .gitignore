@@ -128,7 +128,6 @@ HINDSIGHT*.md
 /README.work.md
 /README.daily.md
 /example/configs/demo_minimal_*.yaml
-/example/configs/install_utils_probe_*.yaml
 /scripts/optimization_plan.md
 /docs/GOFCARDS_ENDPOINT_RELIABILITY.md
 /docs/installation-dependency-ledger-*.md

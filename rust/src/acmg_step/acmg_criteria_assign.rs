@@ -43,7 +43,8 @@ use super::acmg_pvs1_null_variant::{
     transcript_gene_map,
 };
 use super::acmg_scoring::{
-    RankingOptions, posterior_columns, sort_and_rank_variants, summarize_acmg_criteria,
+    RankingOptions, SPLICEAI2_KEEP_SCORE, posterior_columns, sort_and_rank_variants,
+    summarize_acmg_criteria,
 };
 use super::acmg_variant_mechanism::annotate_exact_nonlof_variants;
 use super::gene_mechanism_annotation::annotate_gene_mechanism_categories;
@@ -64,7 +65,7 @@ use crate::pandas_table::{
 use crate::protein_domain_mapping::data_directory;
 use crate::python_args::{self, parse_long_option_occurrences};
 use crate::python_text::{parse_float, python_int};
-use crate::spliceai_cutoffs::{Cutoffs, cutoffs_for_config};
+use crate::spliceai_cutoffs::{Cutoffs, SPLICEAI2, cutoffs_for_config};
 use crate::yaml_config::{ConfigValue, Parsed, Scalar, parse_config};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -1014,6 +1015,9 @@ pub(crate) fn run_step(args: &StepArguments, cutoffs: &Cutoffs) -> Result<Table>
         relevant_gene_list: args.relevant_gene_list.as_deref(),
         dispensable_gene_list: args.dispensable_gene_list.as_deref(),
         phenotype_gene_ranking: phenotype_gene_ranking.as_deref(),
+        keep_listed_genes: true,
+        // The cutoff is on SpliceAI2's scale; SpliceAI v1 scores keep Python's rows.
+        spliceai_keep_score: (*cutoffs == SPLICEAI2).then_some(SPLICEAI2_KEEP_SCORE),
     };
     let ranked = sort_and_rank_variants(table, ped.as_ref(), args.fam_name.as_deref(), &options)?;
     write_table(Path::new(&args.anno_table), &ranked)?;

@@ -943,6 +943,15 @@ pub(crate) fn run(options: &Options) -> Result<()> {
             ));
         }
     }
+    // The annotation hub, for the scores of the SpliceAI2 step only: the
+    // annotation steps look up and add to it in tasks of their own.
+    let annotation_hub = options
+        .get("annotation-hub")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from);
+    if annotation_hub.is_some() && phase != "prioritization-spliceai2" {
+        return refuse("--annotation-hub belongs to the prioritization-spliceai2 phase");
+    }
     // Raw mode annotates one step per task; the whole-annotation phase only
     // imports an already annotated VCF.
     let step = phase.strip_prefix("annotation-");
@@ -989,7 +998,8 @@ pub(crate) fn run(options: &Options) -> Result<()> {
     // table instead of a VCF; their input is the table itself.
     let table_phase = matches!(
         phase,
-        "prioritization-splicing"
+        "prioritization-spliceai2"
+            | "prioritization-splicing"
             | "prioritization-utr"
             | "prioritization-join"
             | "prioritization-acmg"
@@ -1031,6 +1041,7 @@ pub(crate) fn run(options: &Options) -> Result<()> {
         }
         None => None,
     };
+    let mut spliceai2 = None;
     if stub {
         // Tiny syntactic fixtures; no scientific acceptance is claimed.
         match phase {
@@ -1056,7 +1067,10 @@ pub(crate) fn run(options: &Options) -> Result<()> {
                 result.join(format!("{family_base}.tsv")),
                 "Chr\tStart\tRef\tAlt\tFeature\n1\t10\tA\tG\tSTUB\n",
             )?,
-            "prioritization-splicing" | "prioritization-utr" | "prioritization-join" => {}
+            "prioritization-spliceai2"
+            | "prioritization-splicing"
+            | "prioritization-utr"
+            | "prioritization-join" => {}
             "filtration" => {
                 let destination = result.join(format!("{family_base}.vcf.gz"));
                 copy_writable(&input_vcf, &destination)?;
@@ -1163,6 +1177,14 @@ pub(crate) fn run(options: &Options) -> Result<()> {
             "prioritization-combine" => {
                 crate::pipeline_steps::family::combine(&steps, &input, &cadd_text)?;
             }
+            "prioritization-spliceai2" => {
+                spliceai2 = Some(crate::pipeline_steps::spliceai2::run(
+                    &steps,
+                    &input,
+                    annotation_hub.as_deref(),
+                    usize::try_from(cpus)?,
+                )?);
+            }
             "prioritization-splicing" => {
                 crate::pipeline_steps::family::splicing(&steps, &input)?;
             }
@@ -1209,6 +1231,7 @@ pub(crate) fn run(options: &Options) -> Result<()> {
         _ if step.is_some() => &[".anno.vcf.gz", ".anno.vcf.gz.tbi"],
         "filtration" => &[".vcf.gz", ".vcf.gz.tbi", ".cadd.tsv"],
         "prioritization-combine"
+        | "prioritization-spliceai2"
         | "prioritization-splicing"
         | "prioritization-utr"
         | "prioritization-join" => &[".tsv"],
@@ -1255,6 +1278,19 @@ pub(crate) fn run(options: &Options) -> Result<()> {
                     text(path.file_name().unwrap().to_string_lossy().into_owned()),
                 ),
                 ("sha256", text(sha256(path)?)),
+            ]),
+        );
+    }
+    if let Some(summary) = &spliceai2 {
+        let count = |value: usize| Json::Int(value as i128);
+        provenance.set(
+            "spliceai2",
+            object(vec![
+                ("variants_without_published_score", count(summary.needed)),
+                ("from_annotation_hub", count(summary.stored)),
+                ("scored_now", count(summary.scored)),
+                ("rows_filled", count(summary.rows)),
+                ("hub_folder", text(summary.lineage.clone())),
             ]),
         );
     }

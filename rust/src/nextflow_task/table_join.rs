@@ -81,13 +81,13 @@ fn join_in_memory(combined: &Path, splicing: &Path, utr: &Path, output: &Path) -
 /// One file read record by record. A record ends at a line end outside
 /// quotes; the writer quotes a field with a tab, quote or line end and
 /// doubles its quotes, so a field never holds an unquoted quote.
-struct Records<R: BufRead> {
+pub(crate) struct Records<R: BufRead> {
     reader: R,
-    record: Vec<u8>,
+    pub(crate) record: Vec<u8>,
     count: usize,
 }
 
-fn open(path: &Path) -> Result<Records<BufReader<File>>> {
+pub(crate) fn open(path: &Path) -> Result<Records<BufReader<File>>> {
     Ok(Records::new(BufReader::with_capacity(
         1 << 22,
         File::open(path)?,
@@ -104,7 +104,7 @@ impl<R: BufRead> Records<R> {
     }
 
     /// The next record without its line end; `false` at the end of the file.
-    fn next(&mut self) -> Result<bool> {
+    pub(crate) fn next(&mut self) -> Result<bool> {
         self.record.clear();
         let mut quotes = 0usize;
         loop {
@@ -133,7 +133,7 @@ impl<R: BufRead> Records<R> {
 }
 
 /// The fields of a record as they are written, split at tabs outside quotes.
-fn fields(record: &[u8]) -> Vec<&[u8]> {
+pub(crate) fn fields(record: &[u8]) -> Vec<&[u8]> {
     let mut out = Vec::new();
     let (mut start, mut quoted) = (0, false);
     for (index, byte) in record.iter().enumerate() {

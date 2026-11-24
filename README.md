@@ -251,7 +251,24 @@ its new folder, so the next cohort finds them; earlier folders are never changed
 
 Family tasks run prioritization in five steps: combine the family table, add the
 splicing and 5′ UTR columns side by side on copies of it, join the copies (refusing
-differing rows or shared columns), then assign the ACMG criteria.
+differing rows or shared columns), then assign the ACMG criteria. With the SpliceAI2
+model configured, a sixth task fills the combined table's empty SpliceAI scores first
+(below).
+
+**Rows the ranking keeps.** The combined table has a row for every Ensembl transcript
+within 5 kb of a variant, so an intergenic variant has none. The ACMG step then ranks:
+
+1. Every row of a protein-coding transcript.
+2. The rows of a relevant gene, whatever the transcript's biotype, when the variant
+   overlaps the transcript (not its upstream or downstream flank) and has no
+   protein-coding row of that gene. The relevant genes are those of the family's gene
+   ranking, when it has HPO terms (phenotype gene bonus, below), and those of the
+   configuration's `relevant_gene_list`; a gene in either counts. Without both lists, no
+   row is added. Genes match by symbol.
+3. The rows with a SpliceAI2 score of at least 0.3, of a variant without any
+   protein-coding row. Runs with SpliceAI v1 scores add no such rows.
+
+The criteria table (`.acmg.tsv`) is written before this choice and has every row.
 
 **Phenotype gene bonus (optional, off by default).** It turns on by itself for
 each family that `--phenotype_hpo_terms TERMS.tsv` gives HPO terms for (the
@@ -291,6 +308,32 @@ not in the run are left out with a warning, so a mistyped family ID shows up in
 both warnings. Outside Nextflow, the key `phenotype_gene_ranking: FAMILY.gene_ranked.tsv`
 in the configuration of a one-family run does the same.
 
+**SpliceAI2 scores for rare variants (optional, off by default).** The published SpliceAI2
+tables hold every single-base change of the protein-coding genes, but only the insertions,
+deletions and multi-base substitutions seen in human populations; a rare one has empty
+SpliceAI columns. With `spliceai2_model_dir` (the model's weights, as `NAME/model.ckpt`)
+and `spliceai2_python` (a Python with the `spliceai2` package) in the configuration, each
+family gets a `SCORE_SPLICEAI2` task between the combined table and the splicing step:
+
+1. It lists the rows whose SpliceAI columns are empty, that are not a single-base change,
+   and whose gene is a scored gene (the gene context beside the SpliceAI2 files, by Ensembl
+   gene ID) with the variant inside the gene's scored interval.
+2. With `--annotation_hub`, scores stored by earlier runs are taken from
+   `HUB/spliceai2/LINEAGE`; LINEAGE counts the scoring script, the package's version, the
+   weights and the reference genome.
+3. `scripts/spliceai2_score_variants.py` scores the others with the publisher's model on
+   CPUs, and stores them in the hub after every 100 variants.
+4. The scores are written into those rows in the columns of VEP's SpliceAI plugin; nothing
+   else in the table changes. The task's provenance file gives the counts.
+
+The weights are not part of the installation: the publisher gives them out to users who
+accept its terms, which allow non-commercial research use only and no diagnostic use. One
+variant takes about 0.11 CPU hours, and one model process about 17 GB (by default three
+processes on 24 CPUs and 72 GB; `--spliceai2_cpus`, `--spliceai2_memory`,
+`--spliceai2_time`). The step needs SpliceAI2 score files (GRCh38) and makes a new resource
+manifest necessary. By hand: `priva task step --step spliceai2 --root CHECKOUT --config
+CONFIG --table TABLE.tsv`.
+
 The example `inputs/` paths are relative to the external `PRIVA_RUNS` directory; replace them with your actual input paths and assembly. Use a new output directory for changed inputs, source, resources or settings. For the same run, retain the external launch/work directories and Nextflow cache, and append `-resume`; launch-time resource checks still apply to a fully cached run.
 
 | Profile/option | Scope |
@@ -301,7 +344,8 @@ The example `inputs/` paths are relative to the external `PRIVA_RUNS` directory;
 | `-profile apptainer` | Requires an explicitly selected tested `--container_image` and matching software identity. Tasks run with `--cleanenv`, so they use the image's tools; bind the cache, data and input folders with `--container_run_options='-B /path'`. Build the image from [priva_acmg.def](priva_acmg.def) |
 | `-profile task_readonly` | Optional Linux Bubblewrap task filesystem boundary; it cannot be combined with `apptainer` |
 | `-profile test -stub-run` | Synthetic wiring only; its outputs are not scientific results |
-| `--phenotype_hpo_terms` | The optional phenotype gene bonus, above (needs install step F10); the ranking task asks for 1 CPU, 4 GB and 1 hour |
+| `--phenotype_hpo_terms` | The optional phenotype gene bonus, above (needs install step F10); the ranking task asks for 1 CPU, 4 GB and 1 hour. Its genes also keep their non-coding rows in the ranking |
+| `--spliceai2_cpus`, `--spliceai2_memory`, `--spliceai2_time` | Each family's SpliceAI2 scoring task, above (default 24 CPUs, 72 GB, 24 hours); it runs only with `spliceai2_model_dir` in the configuration |
 
 Keep scientific worker counts in the legacy configuration's `threads` and
 `threads_per_fam`; set task CPU allocations independently. Family tasks need at

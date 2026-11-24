@@ -4,7 +4,9 @@
 //! against the shell function it replaced and for looking into one family
 //! or cohort by hand. The priva program is PRIVA_BINARY, else this program.
 use super::{Options, Result};
-use crate::pipeline_steps::{cadd, clinvar, control, family, gnomad, preprocess, tools, vep};
+use crate::pipeline_steps::{
+    cadd, clinvar, control, family, gnomad, preprocess, spliceai2, tools, vep,
+};
 use std::path::PathBuf;
 
 /// The steps `--step` takes.
@@ -19,6 +21,7 @@ pub(super) const STEPS: &[&str] = &[
     "filtration",
     "prioritization",
     "combine",
+    "spliceai2",
     "splicing",
     "utr",
     "acmg",
@@ -78,6 +81,15 @@ pub(super) fn run(options: &Options) -> Result<()> {
         "filtration" => family::filtration(&context, value("vcf"), family_id),
         "prioritization" => family::prioritize(&context, value("vcf"), value("cadd"), family_id),
         "combine" => family::combine(&context, value("vcf"), value("cadd")),
+        // The model's scores for the table's unscored variants, with --forks
+        // CPUs (all by default) and without an annotation hub.
+        "spliceai2" => {
+            let cpus = match options.get("forks") {
+                Some(_) => usize::try_from(options.int("forks")?)?,
+                None => std::thread::available_parallelism().map_or(1, usize::from),
+            };
+            spliceai2::run(&context, value("table"), None, cpus.max(1)).map(|_| ())
+        }
         "splicing" => family::splicing(&context, value("table")),
         "utr" => family::utr(&context, value("table")),
         _ => family::acmg(&context, value("table"), family_id),

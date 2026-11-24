@@ -284,8 +284,9 @@ process FILTER_FAMILY {
 }
 
 // Prioritization, one task per step and family: combine builds the family
-// table; splicing and 5' UTR add their columns to copies of it side by side;
-// join puts the copies together; ACMG assigns the criteria.
+// table; the optional SpliceAI2 step fills its empty SpliceAI scores; splicing
+// and 5' UTR add their columns to copies of it side by side; join puts the
+// copies together; ACMG assigns the criteria.
 process PRIORITIZE_COMBINE {
     tag "${family ?: 'no pedigree'}"
     label 'family'
@@ -304,6 +305,34 @@ process PRIORITIZE_COMBINE {
     def familyArg = family ? "--family '${family}'" : ''
     """
     '${meta.priva_binary}' task run --phase prioritization-combine --bundle bundle ${familyArg} --vcf '${vcf}' --vcf-index '${vcf_index}' --cadd '${cadd}' --cpus ${task.cpus} --stub
+    """
+}
+
+// The SpliceAI2 model's scores for the table's insertions, deletions and
+// multi-base substitutions that the published SpliceAI2 tables do not hold
+// (they hold those seen in human populations). Runs only when the
+// configuration names the model's weights (spliceai2_model_dir); with an
+// annotation hub each variant is scored once.
+process SCORE_SPLICEAI2 {
+    tag "${family ?: 'no pedigree'}"
+    label 'spliceai2'
+    publishDir "${params.outdir}/pipeline_info", mode: 'copy', overwrite: false, pattern: '*.provenance.json'
+    input:
+    tuple val(meta), val(family), path(table, stageAs: 'input.tsv'), path(bundle, stageAs: 'bundle/*')
+    output:
+    tuple val(meta), val(family), path('result/*.filtered.tsv'), path('bundle/*', includeInputs: true), emit: table
+    path('prioritization-spliceai2*.provenance.json'), emit: provenance
+    script:
+    def familyArg = family ? "--family '${family}'" : ''
+    def hubArg = params.annotation_hub ? " --annotation-hub '${params.annotation_hub}'" : ''
+    """
+    '${meta.priva_binary}' task run --phase prioritization-spliceai2 --bundle bundle ${familyArg} --table '${table}'${hubArg} --cpus ${task.cpus}
+    """
+    stub:
+    def familyArg = family ? "--family '${family}'" : ''
+    def hubArg = params.annotation_hub ? " --annotation-hub '${params.annotation_hub}'" : ''
+    """
+    '${meta.priva_binary}' task run --phase prioritization-spliceai2 --bundle bundle ${familyArg} --table '${table}'${hubArg} --cpus ${task.cpus} --stub
     """
 }
 

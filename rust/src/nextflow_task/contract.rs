@@ -57,6 +57,16 @@ pub(crate) const OPTIONAL_INPUTS: &[&str] = &[
 /// (`priva hpo-gene-ranking`: raw/, prepared/ and hpo_graph/), set by install
 /// step F10 HPO_GENE_RANKING.
 pub(crate) const PHENOTYPE_REFERENCE_KEY: &str = "hpo_gene_ranking_reference_dir";
+/// The configuration key of the SpliceAI2 model's weights: with it, the family
+/// tasks score the variants the published SpliceAI2 tables do not hold.
+pub(crate) const SPLICEAI2_MODEL_KEY: &str = "spliceai2_model_dir";
+/// What only the SpliceAI2 scoring step reads: the weights, the Python that has
+/// the spliceai2 package, and the gene context beside the SpliceAI2 files.
+const SPLICEAI2_KEYS: &[&str] = &[
+    SPLICEAI2_MODEL_KEY,
+    "spliceai2_python",
+    "spliceai2_gene_context",
+];
 /// Executables whose bytes are pinned by SHA-256 even when large caches use
 /// stat reuse: `priva_binary` runs the converted pipeline steps from the
 /// shell scripts; `priva_ranking_binary` is the optional ranking program.
@@ -296,6 +306,23 @@ pub(crate) fn runtime_resources(
             &mut paths,
             PHENOTYPE_REFERENCE_KEY.to_string(),
             config_path(config, PHENOTYPE_REFERENCE_KEY)?,
+        );
+    }
+    // The optional SpliceAI2 scoring step.
+    if config.truthy(SPLICEAI2_MODEL_KEY) {
+        for key in [SPLICEAI2_MODEL_KEY, "spliceai2_python"] {
+            put(&mut paths, key.to_string(), config_path(config, key)?);
+        }
+        let prescore = config.text_of("spliceai_snv_prescore", "");
+        let Some(context) = crate::pipeline_steps::spliceai2::gene_context(&prescore) else {
+            return refuse(
+                "spliceai2_model_dir needs SpliceAI2 score files: spliceai_snv_prescore is not one prepared by priva spliceai2-prepare",
+            );
+        };
+        put(
+            &mut paths,
+            "spliceai2_gene_context".to_string(),
+            checked_path(Some(&context), "spliceai2_gene_context")?,
         );
     }
     if config.truthy("pp1_vcf") != config.truthy("pp1_ped") {
@@ -844,6 +871,13 @@ pub(crate) fn phase_reads(phase: &str, key: &str) -> bool {
         return !(phase.starts_with("annotation-")
             || phase == "filtration"
             || phase.starts_with("prioritization"));
+    }
+    // Read by the SpliceAI2 scoring step alone; input validation checks it too.
+    if SPLICEAI2_KEYS.contains(&key) {
+        return phase == "prioritization-spliceai2"
+            || !(phase.starts_with("annotation-")
+                || phase == "filtration"
+                || phase.starts_with("prioritization"));
     }
     match phase {
         "annotation-preprocess" => key == "ref_genome",

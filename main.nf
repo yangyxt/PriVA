@@ -1,6 +1,6 @@
 nextflow.enable.dsl=2
 
-include { VALIDATE_INPUTS; ANNOTATE_PREPROCESS; ANNOTATE_STEP; ANNOTATE_CADD; SPLIT_CHROMOSOMES; GATHER_PIECES; ANNOTATE_MERGE; HUB_LOOKUP; HUB_FILL; HUB_ADD; HUB_REFRESH_PLAN; FILTER_FAMILY; PRIORITIZE_COMBINE; PRIORITIZE_SPLICING; PRIORITIZE_UTR; PRIORITIZE_JOIN; PRIORITIZE_ACMG } from './modules/local/compatibility'
+include { VALIDATE_INPUTS; ANNOTATE_PREPROCESS; ANNOTATE_STEP; ANNOTATE_CADD; SPLIT_CHROMOSOMES; GATHER_PIECES; ANNOTATE_MERGE; HUB_LOOKUP; HUB_FILL; HUB_ADD; HUB_REFRESH_PLAN; FILTER_FAMILY; PRIORITIZE_COMBINE; SCORE_SPLICEAI2; PRIORITIZE_SPLICING; PRIORITIZE_UTR; PRIORITIZE_JOIN; PRIORITIZE_ACMG } from './modules/local/compatibility'
 include { INSTALL_RESOURCES } from './workflows/install'
 include { RANK_PHENOTYPE_GENES } from './modules/local/phenotype_genes'
 
@@ -51,6 +51,14 @@ def readHpoTerms(path) {
         }
     }
     terms
+}
+
+// A setting of the configuration, '' when it is missing, empty or null.
+def configSetting(path, key) {
+    def line = file(path, checkIfExists: true).readLines().find { text -> text.startsWith("${key}:") }
+    def value = line ? line.substring(key.length() + 1).replaceFirst(/\s+#.*$/, '').trim() : ''
+    if (value.length() > 1 && value[0] == value[-1] && value[0] in ['"', "'"]) value = value.substring(1, value.length() - 1)
+    value in ['null', '~'] ? '' : value
 }
 
 // The plan HUB_REFRESH_PLAN writes: which steps to refresh, and how many variants.
@@ -120,6 +128,9 @@ Optional: --ped COHORT.ped --family ID --vcf_index VCF.vcf.gz.tbi
             priva hpo-gene-ranking and the installed reference (install step
             F10). On for each family with terms; families without terms rank
             as before
+          spliceai2_model_dir and spliceai2_python in CONFIG.yaml: the SpliceAI2
+            model scores the insertions, deletions and multi-base
+            substitutions its published tables do not hold (SCORE_SPLICEAI2)
 The cohort VCF is validated and annotated once, one task per annotation step.
 With --ped, every PED family is then filtered and prioritized in its own tasks
 (--family selects one); without --ped, one run covers all samples without
@@ -303,6 +314,12 @@ outputs and scientific-profile requirements.'''
         // and 5' UTR side by side on copies of the table, join, then ACMG.
         PRIORITIZE_COMBINE(toPrioritize)
         def combined = PRIORITIZE_COMBINE.out.table.map(bundleLast)
+        // With the SpliceAI2 model's weights in the configuration, the table's
+        // empty SpliceAI scores are filled before any step reads them.
+        if (configSetting(params.legacy_config, 'spliceai2_model_dir')) {
+            SCORE_SPLICEAI2(combined)
+            combined = SCORE_SPLICEAI2.out.table.map(bundleLast)
+        }
         PRIORITIZE_SPLICING(combined)
         PRIORITIZE_UTR(combined)
         def toJoin = combined.map { run, family, table, bundle -> [family, run, table, bundle] }

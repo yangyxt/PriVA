@@ -18,5 +18,6 @@ pub(crate) mod control;
 pub(crate) mod family;
 pub(crate) mod gnomad;
 pub(crate) mod preprocess;
+pub(crate) mod spliceai2;
 pub(crate) mod tools;
 pub(crate) mod vep;

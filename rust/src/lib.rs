@@ -122,6 +122,7 @@ mod sha256;
 pub mod spliceai2;
 mod spliceai2_install;
 mod spliceai2_prepare;
+mod spliceai2_scores;
 pub mod spliceai_cache_input;
 pub mod spliceai_cutoffs;
 mod splicevault_builder;

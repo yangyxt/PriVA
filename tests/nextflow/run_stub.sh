@@ -210,6 +210,32 @@ assert 'Phenotype gene bonus is on for 1 of 2 families' in log
 assert 'Phenotype gene bonus is off for families without HPO terms: OTHER' in log, 'the family without terms was not reported'
 print('Phenotype gene bonus wiring passed (on for each family with terms, off for one without, refused without the installed reference or with the removed options)')
 PY
+# SpliceAI2 scoring. With the model's weights in the configuration, each family
+# gets a SCORE_SPLICEAI2 task between the combined table and the steps that read
+# it; without them (every case above) there is none. The annotation hub's folder
+# goes to the task.
+cp "${fixture}/legacy.yaml" "${fixture}/legacy_spliceai2.yaml"
+printf 'spliceai2_model_dir: "%s"  # weights\nspliceai2_python: /usr/bin/python3\n' "${fixture}/spliceai2_models" >> "${fixture}/legacy_spliceai2.yaml"
+spliceai2_shared=("${shared[@]/#${fixture}\/legacy.yaml/${fixture}/legacy_spliceai2.yaml}")
+run_with nextflow-stub-spliceai2 "${spliceai2_shared[@]}" --ped "${fixture}/family.ped" \
+    --annotation_hub "${case_root}/hub-spliceai2" --outdir "${case_root}/spliceai2"
+python3 - "${case_root}" <<'PY'
+import csv
+import json
+from pathlib import Path
+import sys
+root = Path(sys.argv[1]) / 'spliceai2'
+trace = sorted((root / 'pipeline_info').glob('trace-*.tsv'))[-1]
+names = sorted(row['name'].split(':')[-1] for row in csv.DictReader(trace.open(), delimiter='\t'))
+assert [n for n in names if n.startswith('SCORE_SPLICEAI2')] == ['SCORE_SPLICEAI2 (FAM)', 'SCORE_SPLICEAI2 (OTHER)'], names
+for step in ('COMBINE', 'SPLICING', 'UTR', 'JOIN', 'ACMG'):
+    assert len([n for n in names if n.startswith(f'PRIORITIZE_{step} ')]) == 2, names
+for family in ('FAM', 'OTHER'):
+    record = json.loads((root / 'pipeline_info' / f'prioritization-spliceai2.{family}.provenance.json').read_text())
+    assert record['phase'] == 'prioritization-spliceai2' and record['family'] == family, record
+assert len(list(root.rglob('*.filtered.acmg.tsv'))) == 2
+print('SpliceAI2 scoring wiring passed (one task per family with the weights configured)')
+PY
 # The removed annotated mode and old hub options are refused with a message
 # that points to the annotation hub.
 if "${nextflow_bin}" -log "${run_root}/logs/nextflow-stub-removed-mode.log" "${common[@]}" \

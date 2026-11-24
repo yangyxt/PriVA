@@ -17,7 +17,7 @@ pub(crate) mod hub_lineage;
 mod info_merge;
 pub(crate) mod rust_reach;
 mod step;
-mod table_join;
+pub(crate) mod table_join;
 mod tasks;
 #[cfg(test)]
 mod tests;
@@ -186,8 +186,9 @@ const LAUNCH_REQUIRED: &[&str] = &[
 /// mode); in raw mode the `annotation-*` steps annotate one source each, and
 /// `annotation-merge` joins their INFO fields. `prioritization` runs every
 /// prioritization step in one task; `prioritization-combine`, `-splicing`,
-/// `-utr` and `-acmg` run one step each, and `prioritization-join` joins the
-/// splicing and 5' UTR copies of the family table.
+/// `-utr` and `-acmg` run one step each, `prioritization-join` joins the
+/// splicing and 5' UTR copies of the family table, and the optional
+/// `prioritization-spliceai2` fills the combined table's empty SpliceAI scores.
 pub(crate) const PHASES: &[&str] = &[
     "annotation",
     "annotation-preprocess",
@@ -200,6 +201,7 @@ pub(crate) const PHASES: &[&str] = &[
     "filtration",
     "prioritization",
     "prioritization-combine",
+    "prioritization-spliceai2",
     "prioritization-splicing",
     "prioritization-utr",
     "prioritization-join",
@@ -272,6 +274,7 @@ fn parse_task(args: &[String]) -> std::result::Result<(String, Options), String>
                     "utr-table",
                     "threads",
                     "phenotype-gene-ranking",
+                    "annotation-hub",
                 ],
                 &["stub"],
             )?;
@@ -280,7 +283,8 @@ fn parse_task(args: &[String]) -> std::result::Result<(String, Options), String>
             // The steps after prioritization-combine read the family table.
             if matches!(
                 options.value("phase"),
-                "prioritization-splicing"
+                "prioritization-spliceai2"
+                    | "prioritization-splicing"
                     | "prioritization-utr"
                     | "prioritization-join"
                     | "prioritization-acmg"
@@ -322,7 +326,7 @@ fn parse_task(args: &[String]) -> std::result::Result<(String, Options), String>
 pub(crate) fn dispatch(args: &[String]) -> crate::cli::Result<()> {
     if args.first().map(String::as_str) == Some("--help") {
         println!(
-            "usage: priva task {{manifest,validate,launch,run,step}} ...\n\nNon-scientific Nextflow task contract: validate inputs and resources, isolate\nwrites, and run each step's tools (VEP, CADD.sh, bcftools, tabix and priva's own\ncommands).\n\nstep runs one pipeline step outside Nextflow, without a contract:\n  priva task step --step {{preprocess,gnomad,clinvar,control,vep,cadd,filtration,\n      prioritization,combine,splicing,utr,acmg}} --root CHECKOUT --config CONFIG\n      [--vcf VCF] [--output PATH] [--cadd TSV] [--table TSV] [--family ID]"
+            "usage: priva task {{manifest,validate,launch,run,step}} ...\n\nNon-scientific Nextflow task contract: validate inputs and resources, isolate\nwrites, and run each step's tools (VEP, CADD.sh, bcftools, tabix and priva's own\ncommands).\n\nstep runs one pipeline step outside Nextflow, without a contract:\n  priva task step --step {{preprocess,gnomad,clinvar,control,vep,cadd,filtration,\n      prioritization,combine,spliceai2,splicing,utr,acmg}} --root CHECKOUT\n      --config CONFIG [--vcf VCF] [--output PATH] [--cadd TSV] [--table TSV]\n      [--family ID] [--forks CPUS]"
         );
         return Ok(());
     }

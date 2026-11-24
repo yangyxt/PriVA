@@ -135,6 +135,13 @@ primateai_prescore: ""
 # TSV is prepared for the unchanged VEP plugin. Provenance stays in sidecars.
 spliceai_snv_prescore: ""
 spliceai_indel_prescore: ""
+
+# Optional: the SpliceAI2 model, to score the insertions, deletions and multi-base
+# substitutions its published tables do not hold (SCORE_SPLICEAI2; leave empty to
+# skip that step). The folder holds the weights as NAME/model.ckpt; the publisher
+# gives them out to users who accept its terms. The Python has the spliceai2 package.
+spliceai2_model_dir: ""
+spliceai2_python: ""
 ####################################################Above you set by hand before the installation####################################################
 
 

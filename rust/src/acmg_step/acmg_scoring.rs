@@ -10,10 +10,12 @@
 //! `crate::acmg_scoring::calculate_posterior_probability`; and `compute_control_common`, which
 //! calls `stats::binom_cdf` and `stats::beta_ppf` (thread T5; until they land, a row whose control
 //! counts are tested stops at their placeholder); and `sort_and_rank_variants` (stages R1 to R8:
-//! protein-coding filter, the proband from the pedigree, the control-common penalty, the
+//! the protein-coding filter (`kept_rows`, with the Rust-only rows of listed genes and of high
+//! SpliceAI2 scores), the proband from the pedigree, the control-common penalty, the
 //! zygosity, inheritance and mechanism compatibility penalty from the mechanism masks, the
 //! dispensable and relevant gene lists, the pext modulation through the earlier
 //! `coerce_pext_value`, and the final order and rank).
+use super::acmg_pp3_bp4_bp7_insilico::pandas_masks::numeric_column;
 use super::acmg_ps2_pm6_denovo::{family_rows, harness_ped, python_str};
 use super::acmg_variant_mechanism::variant_mechanism_masks;
 use super::stats;
@@ -33,7 +35,7 @@ use crate::pandas_table::{Cell, Column, ObjectValue, Table, TextColumn};
 use crate::pandas_table::{Header, ReadOptions, UseColumns, read_table_with};
 use crate::python_text::python_strip;
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// `priva acmg-step acmg_scoring <function>`: runs one converted function on a frame.
@@ -47,8 +49,9 @@ use std::path::Path;
 /// `compute_control_common`: option `proband` (text or null); the result is the table.
 /// `sort_and_rank_variants`: options `ped_frame` (a frame file, or absent for `ped_df=None`),
 /// `fam_name`, `pext_tissues`, `pext_low_expression_cutoff`, `pext_penalty_floor`,
-/// `pext_penalty_shape`, `relevant_gene_list`, `dispensable_gene_list` (null for None); the
-/// result is the sorted table.
+/// `pext_penalty_shape`, `relevant_gene_list`, `dispensable_gene_list` (null for None), and
+/// the Rust-only `keep_listed_genes` (default false) and `spliceai_keep_score` (default
+/// none), without which the rows are Python's; the result is the sorted table.
 pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
     match function {
         "summarize_acmg_criteria" => {
@@ -126,6 +129,14 @@ pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
                 relevant_gene_list: text("relevant_gene_list"),
                 dispensable_gene_list: text("dispensable_gene_list"),
                 phenotype_gene_ranking: text("phenotype_gene_ranking"),
+                keep_listed_genes: matches!(
+                    call.options.get("keep_listed_genes"),
+                    Some(Json::Bool(true))
+                ),
+                spliceai_keep_score: match call.options.get("spliceai_keep_score") {
+                    Some(Json::Float(value)) => Some(*value),
+                    _ => None,
+                },
             };
             sort_and_rank_variants(call.table.clone(), ped.as_ref(), text("fam_name"), &options)
         }
@@ -545,7 +556,17 @@ pub(crate) struct RankingOptions<'a> {
     /// The family's gene ranking for the phenotype gene bonus (see
     /// `phenotype_gene_indices`). Python has no such argument: `None` ranks as Python does.
     pub(crate) phenotype_gene_ranking: Option<&'a str>,
+    /// Keep the rows of every gene in the gene ranking and the relevant gene list, whatever
+    /// the transcript's biotype (see `kept_rows`). Python has no such rule.
+    pub(crate) keep_listed_genes: bool,
+    /// Keep a variant without a protein-coding row when a row's SpliceAI score is at least
+    /// this (see `kept_rows`; `None`: never). Python has no such rule.
+    pub(crate) spliceai_keep_score: Option<f64>,
 }
+
+/// The SpliceAI2 score from which a variant without a protein-coding row is kept: between
+/// the publisher's balanced (0.25) and high-precision (0.5) thresholds.
+pub(crate) const SPLICEAI2_KEEP_SCORE: f64 = 0.3;
 
 /// The weight of the phenotype gene bonus at the family's top gene, the same as the
 /// relevant gene list's weight.
@@ -714,7 +735,7 @@ fn pedigree_context(
 
 /// `pd.read_table(path, header=None, names=["SYMBOL"], comment="#")` as a set of
 /// texts. A missing value in the list is refused (pandas would match missing symbols).
-fn gene_list(path: &str) -> Result<std::collections::HashSet<String>> {
+fn gene_list(path: &str) -> Result<HashSet<String>> {
     let options = ReadOptions {
         header: Header::Names(vec!["SYMBOL".to_owned()]),
         comment: Some(b'#'),
@@ -722,7 +743,7 @@ fn gene_list(path: &str) -> Result<std::collections::HashSet<String>> {
     };
     let list = read_table_with(Path::new(path), &options)?;
     let column = list.column("SYMBOL")?;
-    let mut genes = std::collections::HashSet::new();
+    let mut genes = HashSet::new();
     for row in 0..list.rows {
         match column.cell(row) {
             Cell::Text(text) => {
@@ -739,7 +760,7 @@ fn gene_list(path: &str) -> Result<std::collections::HashSet<String>> {
 }
 
 /// `df["SYMBOL"].isin(genes)`.
-fn symbol_mask(table: &Table, genes: &std::collections::HashSet<String>) -> Result<Vec<bool>> {
+fn symbol_mask(table: &Table, genes: &HashSet<String>) -> Result<Vec<bool>> {
     let symbols = table.column("SYMBOL")?;
     Ok((0..table.rows)
         .map(|row| matches!(symbols.cell(row), Cell::Text(text) if genes.contains(text)))
@@ -868,9 +889,146 @@ impl KeyValues {
     }
 }
 
-/// `sort_and_rank_variants(df, ped_df, fam_name, ...)`: the protein-coding rows of the
-/// table with the ranking columns, sorted by the best `sort_index` of each variant, then
-/// `ACMG_quant_score`, `chrom`, `pos`, `ref`, `alt`, and ranked by `variant_id`.
+/// Each row's SpliceAI score: the largest of its four delta scores, NaN without one. A table
+/// without these columns has no scores.
+fn spliceai_scores(table: &Table) -> Result<Vec<f64>> {
+    let mut best = vec![f64::NAN; table.rows];
+    for column in ["AG", "AL", "DG", "DL"] {
+        let name = format!("SpliceAI_pred_DS_{column}");
+        if !table.has_column(&name) {
+            return Ok(vec![f64::NAN; table.rows]);
+        }
+        for (best, value) in best.iter_mut().zip(numeric_column(table, &name)?) {
+            if !value.is_nan() && !(*best >= value) {
+                *best = value;
+            }
+        }
+    }
+    Ok(best)
+}
+
+/// A variant of each row, as a key: its `chrom`, `pos`, `ref` and `alt`.
+struct VariantKeys(Vec<KeyValues>);
+
+impl VariantKeys {
+    fn of(table: &Table) -> Result<Self> {
+        ["chrom", "pos", "ref", "alt"]
+            .iter()
+            .map(|name| KeyValues::of(table, name))
+            .collect::<Result<_>>()
+            .map(Self)
+    }
+
+    fn key(&self, row: usize) -> Vec<String> {
+        self.0.iter().map(|key| key.group_key(row)).collect()
+    }
+}
+
+/// The rows the ranking keeps: every protein-coding row, as Python does, and two Rust-only
+/// additions (24 November 2026). Both add rows only where the protein-coding rows say
+/// nothing, so a variant gains no second set of rows for a gene it already has.
+///
+/// - `keep_listed_genes`: the rows of a gene of the family's gene ranking (its HPO terms) or
+///   of the user's relevant gene list, whatever the transcript's biotype, when the variant
+///   overlaps the transcript and has no protein-coding row of that gene. A row whose only
+///   consequence is upstream or downstream of the transcript (VEP gives those up to 5 kb
+///   away) does not overlap it. Genes match by symbol, as the bonus and the list weights
+///   do. Without either list nothing is added.
+/// - `spliceai_keep_score`: the rows with at least this SpliceAI score, of a variant that
+///   has no protein-coding row.
+fn kept_rows(table: &Table, options: &RankingOptions<'_>) -> Result<Vec<bool>> {
+    let biotype = table.column("BIOTYPE")?;
+    let coding: Vec<bool> = (0..table.rows)
+        .map(|row| biotype.cell(row) == Cell::Text("protein_coding"))
+        .collect();
+    let mut keep = coding.clone();
+    if options.keep_listed_genes {
+        let mut genes: HashSet<String> = HashSet::new();
+        if let Some(path) = options.phenotype_gene_ranking {
+            genes.extend(phenotype_gene_indices(path)?.into_keys());
+        }
+        if let Some(path) = options.relevant_gene_list {
+            genes.extend(gene_list(path)?);
+        }
+        if !genes.is_empty() {
+            let consequence = table.column("Consequence")?;
+            let outside = |row: usize| {
+                matches!(
+                    consequence.cell(row),
+                    Cell::Text("upstream_gene_variant" | "downstream_gene_variant")
+                )
+            };
+            let listed = symbol_mask(table, &genes)?;
+            let overlapping: Vec<usize> = (0..table.rows)
+                .filter(|row| listed[*row] && !coding[*row] && !outside(*row))
+                .collect();
+            let mut added = 0;
+            if !overlapping.is_empty() {
+                let (variants, symbols) = (VariantKeys::of(table)?, table.column("SYMBOL")?);
+                let variant_and_gene = |row: usize| -> Vec<String> {
+                    let mut key = variants.key(row);
+                    if let Cell::Text(symbol) = symbols.cell(row) {
+                        key.push(symbol.to_string());
+                    }
+                    key
+                };
+                // Only the listed genes' rows are looked up among the coding rows.
+                let mut has_coding: HashMap<Vec<String>, bool> = overlapping
+                    .iter()
+                    .map(|row| (variant_and_gene(*row), false))
+                    .collect();
+                for row in (0..table.rows).filter(|row| coding[*row] && listed[*row]) {
+                    if let Some(found) = has_coding.get_mut(&variant_and_gene(row)) {
+                        *found = true;
+                    }
+                }
+                for row in overlapping {
+                    if !has_coding[&variant_and_gene(row)] {
+                        keep[row] = true;
+                        added += 1;
+                    }
+                }
+            }
+            eprintln!(
+                "INFO: {added} rows of {} listed genes kept for variants without a protein-coding row of the gene",
+                genes.len()
+            );
+        }
+    }
+    if let Some(cutoff) = options.spliceai_keep_score {
+        let scores = spliceai_scores(table)?;
+        let high: Vec<usize> = (0..table.rows)
+            .filter(|row| !coding[*row] && scores[*row] >= cutoff)
+            .collect();
+        if !high.is_empty() {
+            let variants = VariantKeys::of(table)?;
+            // Only the few variants with such a row are looked up among the coding rows.
+            let mut has_coding: HashMap<Vec<String>, bool> =
+                high.iter().map(|row| (variants.key(*row), false)).collect();
+            for row in (0..table.rows).filter(|row| coding[*row]) {
+                if let Some(found) = has_coding.get_mut(&variants.key(row)) {
+                    *found = true;
+                }
+            }
+            let mut added = 0;
+            for row in high {
+                if !keep[row] && !has_coding[&variants.key(row)] {
+                    keep[row] = true;
+                    added += 1;
+                }
+            }
+            eprintln!(
+                "INFO: {added} rows with a SpliceAI score of at least {cutoff} kept for variants without a protein-coding row"
+            );
+        }
+    }
+    Ok(keep)
+}
+
+/// `sort_and_rank_variants(df, ped_df, fam_name, ...)`: the rows `kept_rows` keeps (Python's
+/// are the protein-coding rows) with the ranking columns, sorted by the best `sort_index` of
+/// each variant, then `ACMG_quant_score`, `chrom`, `pos`, `ref`, `alt`, and ranked by
+/// `variant_id`.
 ///
 /// The table is taken, and its rows are kept and sorted column by column, so it
 /// is held about once (the step's peak memory was here: three copies).
@@ -880,7 +1038,7 @@ pub(crate) fn sort_and_rank_variants(
     fam_name: Option<&str>,
     options: &RankingOptions<'_>,
 ) -> Result<Table> {
-    // R1: drop the stale columns, copy the score, keep the protein-coding rows.
+    // R1: drop the stale columns, copy the score, keep the ranking's rows.
     let mut df = table;
     for stale in ["haplo_insuf_index", "zygosity_inheritance_mechanism_index"] {
         if let Some(index) = df.column_index(stale) {
@@ -890,10 +1048,7 @@ pub(crate) fn sort_and_rank_variants(
     }
     let quant = df.column("ACMG_quant_score")?.clone();
     df.set_column("sort_index", quant);
-    let biotype = df.column("BIOTYPE")?;
-    let keep: Vec<bool> = (0..df.rows)
-        .map(|row| biotype.cell(row) == Cell::Text("protein_coding"))
-        .collect();
+    let keep = kept_rows(&df, options)?;
     let mut df = df.into_filtered(&keep);
     let rows = df.rows;
 
@@ -1390,6 +1545,8 @@ mod tests {
             relevant_gene_list: None,
             dispensable_gene_list: None,
             phenotype_gene_ranking: None,
+            keep_listed_genes: false,
+            spliceai_keep_score: None,
         };
         let ranked = sort_and_rank_variants(input.clone(), None, None, &options).unwrap();
         assert_eq!(ranked.rows, 3);
@@ -1482,6 +1639,8 @@ mod tests {
             relevant_gene_list,
             dispensable_gene_list: None,
             phenotype_gene_ranking,
+            keep_listed_genes: false,
+            spliceai_keep_score: None,
         };
         let rank = |relevant_gene_list, phenotype_gene_ranking| {
             sort_and_rank_variants(
@@ -1536,6 +1695,179 @@ mod tests {
         assert!(
             error.contains("total_score of G2 is not a number"),
             "{error}"
+        );
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn listed_genes_and_high_spliceai_scores_keep_rows_beside_the_coding_ones() {
+        // One row per transcript: variant, gene, biotype, consequence, SpliceAI score.
+        let rows = [
+            (
+                "1:5:A:T",
+                "SIRT4",
+                "protein_coding",
+                "upstream_gene_variant",
+                0.9,
+            ),
+            (
+                "1:5:A:T",
+                "RNU4-2",
+                "snRNA",
+                "non_coding_transcript_exon_variant",
+                0.0,
+            ),
+            ("1:5:A:T", "RNU4-1", "snRNA", "downstream_gene_variant", 0.0),
+            (
+                "2:3:C:G",
+                "LNC1",
+                "lncRNA",
+                "intron_variant&non_coding_transcript_variant",
+                0.3,
+            ),
+            (
+                "2:3:C:G",
+                "LNC2",
+                "lncRNA",
+                "intron_variant&non_coding_transcript_variant",
+                f64::NAN,
+            ),
+            (
+                "3:9:G:A",
+                "G9",
+                "retained_intron",
+                "non_coding_transcript_exon_variant",
+                0.29,
+            ),
+            ("4:1:T:C", "G4", "protein_coding", "intron_variant", 0.9),
+            ("4:1:T:C", "G4", "retained_intron", "intron_variant", 0.9),
+        ];
+        let part = |index: usize| -> Vec<&str> {
+            rows.iter()
+                .map(|row| row.0.split(':').nth(index).unwrap())
+                .collect()
+        };
+        let input = table(vec![
+            ("chrom", texts(&part(0))),
+            (
+                "pos",
+                Column::Int(part(1).iter().map(|pos| pos.parse().unwrap()).collect()),
+            ),
+            ("ref", texts(&part(2))),
+            ("alt", texts(&part(3))),
+            ("SYMBOL", texts(&rows.map(|row| row.1))),
+            ("BIOTYPE", texts(&rows.map(|row| row.2))),
+            ("Consequence", texts(&rows.map(|row| row.3))),
+            // The score is the largest of the four columns, whichever holds it.
+            ("SpliceAI_pred_DS_AG", Column::Float(vec![0.0; rows.len()])),
+            (
+                "SpliceAI_pred_DS_AL",
+                Column::Float(rows.map(|row| row.4).to_vec()),
+            ),
+            (
+                "SpliceAI_pred_DS_DG",
+                Column::Float(vec![f64::NAN; rows.len()]),
+            ),
+            ("SpliceAI_pred_DS_DL", Column::Float(vec![0.1; rows.len()])),
+            ("ACMG_quant_score", Column::Float(vec![0.5; rows.len()])),
+            ("var_plausible_patho_mechs", texts(&[""; 8])),
+            ("variant_effect", texts(&["uncertain"; 8])),
+            ("variant_id", texts(&rows.map(|row| row.0))),
+        ]);
+        let directory =
+            std::env::temp_dir().join(format!("priva_kept_rows_{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let ranking = directory.join("F1.gene_ranked.tsv");
+        std::fs::write(
+            &ranking,
+            "sample_id\tgene_symbol\ttotal_score\nF1\tRNU4-2\t5.0\nF1\tRNU4-1\t4.0\n",
+        )
+        .unwrap();
+        let relevant = directory.join("relevant_genes.txt");
+        std::fs::write(&relevant, "LNC2\nG4\n").unwrap();
+        let (ranking, relevant) = (ranking.to_str().unwrap(), relevant.to_str().unwrap());
+        // The kept rows' gene and biotype, in the input's order.
+        let kept = |keep_listed_genes, relevant_gene_list, phenotype_gene_ranking, score| {
+            let options = RankingOptions {
+                pext_tissues: "",
+                pext_low_expression_cutoff: 0.1,
+                pext_penalty_floor: 0.8,
+                pext_penalty_shape: 0.5,
+                relevant_gene_list,
+                dispensable_gene_list: None,
+                phenotype_gene_ranking,
+                keep_listed_genes,
+                spliceai_keep_score: score,
+            };
+            let keep = kept_rows(&input, &options).unwrap();
+            let ranked = sort_and_rank_variants(input.clone(), None, None, &options).unwrap();
+            assert_eq!(ranked.rows, keep.iter().filter(|kept| **kept).count());
+            rows.iter()
+                .zip(keep)
+                .filter(|(_, kept)| *kept)
+                .map(|(row, _)| format!("{} {}", row.1, row.2))
+                .collect::<Vec<_>>()
+        };
+        let coding = vec!["SIRT4 protein_coding", "G4 protein_coding"];
+
+        // Python's rows: no lists and no SpliceAI score, or the rules off.
+        assert_eq!(kept(true, None, None, None), coding);
+        assert_eq!(kept(false, Some(relevant), Some(ranking), None), coding);
+
+        // The gene ranking keeps the listed genes' overlapping rows: RNU4-2's exon row stays
+        // beside SIRT4's, RNU4-1's downstream row does not.
+        assert_eq!(
+            kept(true, None, Some(ranking), None),
+            vec!["SIRT4 protein_coding", "RNU4-2 snRNA", "G4 protein_coding"]
+        );
+        // Without a ranking the user's list does; with both, a gene in either counts. G4 is
+        // listed too, but its variant has G4's protein-coding row, so its other row stays out.
+        assert_eq!(
+            kept(true, Some(relevant), None, None),
+            vec!["SIRT4 protein_coding", "LNC2 lncRNA", "G4 protein_coding"]
+        );
+        assert_eq!(
+            kept(true, Some(relevant), Some(ranking), None),
+            vec![
+                "SIRT4 protein_coding",
+                "RNU4-2 snRNA",
+                "LNC2 lncRNA",
+                "G4 protein_coding"
+            ]
+        );
+
+        // A score of 0.3 keeps the scored row of a variant without a coding row: 0.29 does
+        // not, and the retained intron row of a variant with a coding row is not added.
+        assert_eq!(
+            kept(false, None, None, Some(SPLICEAI2_KEEP_SCORE)),
+            vec!["SIRT4 protein_coding", "LNC1 lncRNA", "G4 protein_coding"]
+        );
+
+        // The kept row of a listed gene takes the gene's bonus under its own name (the rows
+        // of one variant keep the table's order).
+        let options = RankingOptions {
+            pext_tissues: "",
+            pext_low_expression_cutoff: 0.1,
+            pext_penalty_floor: 0.8,
+            pext_penalty_shape: 0.5,
+            relevant_gene_list: None,
+            dispensable_gene_list: None,
+            phenotype_gene_ranking: Some(ranking),
+            keep_listed_genes: true,
+            spliceai_keep_score: Some(SPLICEAI2_KEEP_SCORE),
+        };
+        let ranked = sort_and_rank_variants(input.clone(), None, None, &options).unwrap();
+        assert_eq!(
+            ranked.column("SYMBOL").unwrap(),
+            &texts(&["SIRT4", "RNU4-2", "LNC1", "G4"])
+        );
+        assert_eq!(
+            floats(&ranked, "phenotype_gene_index"),
+            vec![1.0, 1.2, 1.0, 1.0]
+        );
+        assert_eq!(
+            ranked.column("variant_rank").unwrap(),
+            &Column::Int(vec![1, 1, 2, 3])
         );
         std::fs::remove_dir_all(&directory).unwrap();
     }

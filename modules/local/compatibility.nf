@@ -425,3 +425,33 @@ process PRIORITIZE_ACMG {
     '${meta.priva_binary}' task run --phase prioritization-acmg --bundle bundle ${familyArg} --table '${table}'${rankingArg} --cpus ${task.cpus} --stub
     """
 }
+
+// The review workbook of a family: the rows of the top-ranked variants of the
+// ranked table as one Excel sheet in the reviewers' column order (variant,
+// gene, transcript, consequence, ACMG result, matched HPO terms, sort index
+// and rank first). Runs for every family, after the ACMG step.
+process PRIORITIZE_WORKBOOK {
+    tag "${family ?: 'no pedigree'}"
+    label 'family'
+    publishDir "${params.outdir}/prioritization", mode: 'copy', overwrite: false, pattern: 'result/*.review.xlsx'
+    publishDir "${params.outdir}/pipeline_info", mode: 'copy', overwrite: false, pattern: '*.provenance.json'
+    input:
+    // table: the ranked table of PRIORITIZE_ACMG; ranking: the family's gene
+    // ranking, or an empty list (the HPO term column then stays empty).
+    tuple val(meta), val(family), path(table, stageAs: 'input.tsv'), path(ranking, stageAs: 'phenotype_gene_ranking/*'), path(bundle, stageAs: 'bundle/*')
+    output:
+    tuple val(meta), val(family), path('result/*.filtered.review.xlsx'), emit: workbook
+    path('prioritization-workbook*.provenance.json'), emit: provenance
+    script:
+    def familyArg = family ? "--family '${family}'" : ''
+    def rankingArg = ranking ? " --phenotype-gene-ranking '${ranking}'" : ''
+    """
+    '${meta.priva_binary}' task run --phase prioritization-workbook --bundle bundle ${familyArg} --table '${table}'${rankingArg} --cpus ${task.cpus}
+    """
+    stub:
+    def familyArg = family ? "--family '${family}'" : ''
+    def rankingArg = ranking ? " --phenotype-gene-ranking '${ranking}'" : ''
+    """
+    '${meta.priva_binary}' task run --phase prioritization-workbook --bundle bundle ${familyArg} --table '${table}'${rankingArg} --cpus ${task.cpus} --stub
+    """
+}

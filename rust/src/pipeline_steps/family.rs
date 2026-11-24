@@ -158,6 +158,55 @@ pub(crate) fn utr(context: &Context, table: &str) -> Result<()> {
 
 /// `acmg`: priva acmg-assign assigns the ACMG criteria and writes the
 /// criteria matrix TABLE.acmg.tsv beside the table.
+/// The review workbook of a family: the rows of the top-ranked variants of the
+/// ACMG step's table as one Excel sheet (`crate::review_workbook`). The
+/// setting `review_workbook_top_variants` says how many variants (1,000).
+pub(crate) fn workbook(
+    context: &Context,
+    table: &str,
+    family: Option<&str>,
+    output: &std::path::Path,
+) -> Result<()> {
+    let setting = |key: &str| {
+        let value = context.value(key);
+        if value == "null" {
+            String::new()
+        } else {
+            value
+        }
+    };
+    let top_variants = match setting("review_workbook_top_variants").as_str() {
+        "" => crate::review_workbook::DEFAULT_TOP_VARIANTS,
+        count => count.parse().map_err(|_| {
+            format!("review_workbook_top_variants: {count} is not a number of variants")
+        })?,
+    };
+    let expected_incidence = match setting("exp_disease_incidence").as_str() {
+        "" => 0.0001,
+        value => value
+            .parse()
+            .map_err(|_| format!("exp_disease_incidence: {value} is not a number"))?,
+    };
+    let (ped, ranking) = (setting("ped_file"), setting("phenotype_gene_ranking"));
+    let data = std::path::PathBuf::from(context.data(""));
+    let summary = crate::review_workbook::write(&crate::review_workbook::Inputs {
+        table: std::path::Path::new(table),
+        output,
+        top_variants,
+        ped: is_file(&ped).then(|| std::path::Path::new(&ped)),
+        family: family.filter(|name| !name.is_empty()),
+        gene_ranking: is_file(&ranking).then(|| std::path::Path::new(&ranking)),
+        expected_incidence,
+        pext_tissues: &setting("pext_tissues"),
+        data_dir: &data,
+    })?;
+    log(&format!(
+        "Review workbook: {} rows of {} variants, {} columns",
+        summary.rows, summary.variants, summary.columns
+    ));
+    Ok(())
+}
+
 pub(crate) fn acmg(context: &Context, table: &str, family: Option<&str>) -> Result<()> {
     if !not_empty(table) {
         // ${table%.tsv}.acmg.tsv

@@ -308,6 +308,23 @@ not in the run are left out with a warning, so a mistyped family ID shows up in
 both warnings. Outside Nextflow, the key `phenotype_gene_ranking: FAMILY.gene_ranked.tsv`
 in the configuration of a one-family run does the same.
 
+**Review workbook.** After the ACMG step, every family gets `*.filtered.review.xlsx`
+(task `PRIORITIZE_WORKBOOK`): one Excel sheet with all transcript rows of its top-ranked
+variants (`review_workbook_top_variants` in the configuration, 1,000 by default), for
+clinical review. Fifteen columns stay in view when the sheet is scrolled: chromosome,
+position, alleles, variant ID, gene, transcript, molecular consequence, ACMG criteria,
+class and quantified score, the patient's HPO terms the gene matches, the phenotype gene
+index, the sort index and the rank. Then come the canonical transcript, HGVS, the PEXT
+value the ranking used, each member's genotype and allele depths, inheritance, ClinVar,
+population and control frequencies, predictors, splicing and 5′ UTR calls, MaveDB, the
+frequencies of known pathogenic variants, exact mechanism matches and the ranking
+factors. Most cells are the table's values. Condensed cells: the highest gnomAD
+frequency with its allele number and homozygotes; the strongest SpliceAI score with its
+effect (none is named below 0.1); where the inheritance comes from, in words (for one
+read from the gene's constraint, its ClinGen haploinsufficiency score and LOEUF); the
+BS1 frequency cutoffs as fractions such as 1/10,000; the protein domains without
+structure mappings. `priva review-workbook --help` writes one from any ranked table.
+
 **SpliceAI2 scores for rare variants (optional, off by default).** The published SpliceAI2
 tables hold every single-base change of the protein-coding genes, but only the insertions,
 deletions and multi-base substitutions seen in human populations; a rare one has empty
@@ -365,7 +382,7 @@ read `HGNC_ID`.
 |---|---|
 | `annotation/` | The annotated VCF/index and its CADD table |
 | `variants/` | Per family: the filtered VCF/index and matching CADD table |
-| `prioritization/` | Per family: `*.filtered.tsv` ranked transcript rows and `*.filtered.acmg.tsv` evidence matrix |
+| `prioritization/` | Per family: `*.filtered.tsv` ranked transcript rows, `*.filtered.acmg.tsv` evidence matrix and `*.filtered.review.xlsx` review workbook |
 | `pipeline_info/` | Input/resource bundle, provenance of each task (family tasks carry the family in the name) and Nextflow execution reports |
 
 `ACMG_criteria` records applied evidence; `ACMG_quant_score` is the posterior under PriVA's ACMG model; `ACMG_class` is its classification. `sort_index` additionally includes control, inheritance, gene-list and expression weighting. Read `variant_rank` with allele/variant identifiers and transcript columns, since several transcript rows can represent one variant. The default `apply_clingen_override: true` uses curated ClinGen criteria in place of PriVA-derived criteria where available. These outputs support evidence review, not a diagnosis by themselves.

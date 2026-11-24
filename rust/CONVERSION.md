@@ -428,6 +428,25 @@ A new optional step, not a conversion. The published SpliceAI2 tables hold all s
 
 Validation, 24 November 2026: `scripts/spliceai2_score_variants.py` gave the published scores of 15 of 15 variants taken across the score range (largest difference 0.00, all positions equal); an earlier standalone run of the same prediction step reproduced 200 of 200 published insertions and deletions within 0.01. On one family of the TruPath cohort, listing the 1,513 variants to score among 4,814,568 rows took 14 seconds. On a cut of that table (21,214 rows) the step scored 48 of 49 listed variants in 12.7 minutes with 24 CPUs (3 processes of 8 CPUs, about 17 GB each; one variant lies too close to a chromosome end), filled 745 rows, changed no cell outside the SpliceAI columns, and a second run scored nothing and changed nothing. That is about 16 seconds per variant on 24 CPUs. The Nextflow stub test covers the task's wiring (one task per family when the weights are configured, none otherwise).
 
+## Review workbook of every family (Rust only, 24 November 2026)
+
+A new step, not a conversion: the Python pipeline wrote tables only. `priva review-workbook` (`rust/src/review_workbook.rs`) writes one Excel sheet from a family's ranked table, and the task `PRIORITIZE_WORKBOOK` (phase `prioritization-workbook`) runs it for every family after the ACMG step; the workbook is published beside the tables as `*.filtered.review.xlsx`. The task reads the staged table without copying it and stops reading once the rank passes `review_workbook_top_variants` (1,000), so it takes seconds.
+
+The columns and their order follow the reviewers' request (first fifteen fixed: variant, gene, transcript, consequence, ACMG criteria, class and score, matched HPO terms, phenotype gene index, sort index, rank). Cells are the table's values, except these condensed ones:
+
+- Highest gnomAD frequency: the larger of `gnomAD_joint_AF_max` and `gnomAD_joint_AF`, with that cohort's allele number and homozygotes (`gnomAD_nhomalt_max`, or the XX and XY counts added).
+- SpliceAI: the largest of the four scores and its effect with the distance; below 0.1 no effect is named; without a score the cell says so.
+- Where the inheritance comes from: `variant_inheritance_basis` in words. For `gene_constraint` the cell shows what the rule read: the gene's ClinGen haploinsufficiency score and its LOEUF, through the same loaders as the ACMG step (`GeneMechanismHub::load_clingen` and `load_loeuf`).
+- BS1 cutoffs as fractions: the run's `exp_disease_incidence`, and `clinvar_patho_gene_max_af`. The cells do not say where BS1 was applied: the inheritance-specific tests use the gene's own cutoff when it has one, so the audit columns alone do not tell which cutoff decided.
+- Protein domains: without the PDB and AlphaFold structure mappings, each entry once, at most 120 characters.
+- Members: one genotype and one allele depth column per sample of the family, labelled with the role from the pedigree (proband, father, mother, sibling); one phase column per patient.
+- Patient HPO terms the gene matches: from the family's gene ranking (`candidate_generating_hp_names`), empty without one.
+- PEXT: the value the ranking used (the first tissue of `pext_tissues`, else the mean), with its tissue.
+
+A column the table lacks gives empty cells. The `.xlsx` file is written directly as its XML parts with the `zip` crate already in use (inline strings, one style per header group, frozen panes, column widths, a filter on the header), with a fixed file time, so the same table gives the same bytes. No Python is involved.
+
+Validation, 24 November 2026: the unit tests pass (654; new: number and text cells, fractions, domain shortening, column letters, family roles, and a small family table written to a workbook and read back from its XML). The Nextflow stub test covers the task: one workbook per family, and one for a run without a pedigree. On the 44 families of the TruPath cohort the step took 8 seconds per family on average (11 at most), and its workbooks were compared cell by cell with those of the Python script that made the reviewers' pilot files: the same headers and rows, 50,084,377 cells, 19,072 of them different, all in "Where that inheritance comes from". There the pilot script looked the gene's LOEUF up by the symbol as written and missed genes that the gnomAD constraint table lists under an older name (ADGRB3 as BAI3, for example); the step reads it through the ACMG step's loader, which also files each value under the gene's current HGNC symbol, and its values agree with the inheritance the ranking used (in three families: below 0.35 with dominant in 11 of 11 genes, 0.35 or more with recessive in 86 of 86). Families with several affected members have one phase column each (76 to 85 columns in this cohort).
+
 ## Installation as one task per step
 
 `nextflow run main.nf --action install` runs the installer as Nextflow tasks (`workflows/install.nf`, generated from `conf/install_steps.json`; `tests/install_workflow_check.py` fails when the two differ). Nextflow 25.10's strict syntax refuses `-entry`, so the main workflow selects it by `--action`.

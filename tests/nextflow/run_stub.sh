@@ -44,17 +44,18 @@ root = Path(sys.argv[1])
 traces = sorted((root / 'pipeline_info').glob('trace-*.tsv'))
 assert len(traces) >= 2, 'Fresh and resume traces are required'
 fresh = sorted(row['name'].split(' ')[0] for row in csv.DictReader(traces[-2].open(), delimiter='\t'))
-PRIORITIZE = ['PRIORITIZE_ACMG', 'PRIORITIZE_COMBINE', 'PRIORITIZE_JOIN', 'PRIORITIZE_SPLICING', 'PRIORITIZE_UTR']
+PRIORITIZE = ['PRIORITIZE_ACMG', 'PRIORITIZE_COMBINE', 'PRIORITIZE_JOIN', 'PRIORITIZE_SPLICING', 'PRIORITIZE_UTR', 'PRIORITIZE_WORKBOOK']
 assert fresh == sorted(['ANNOTATE_CADD', 'ANNOTATE_MERGE', 'ANNOTATE_PREPROCESS'] + ['ANNOTATE_STEP'] * 4 + [
     'FILTER_FAMILY', 'VALIDATE_INPUTS'] + PRIORITIZE), fresh
 resumed = list(csv.DictReader(traces[-1].open(), delimiter='\t'))
-assert len(resumed) == 14 and all(row['status'] == 'CACHED' for row in resumed), resumed
+assert len(resumed) == 15 and all(row['status'] == 'CACHED' for row in resumed), resumed
 assert sorted(p.name for p in (root / 'annotation').iterdir()) == [
     'cohort.anno.cadd.tsv', 'cohort.anno.vcf.gz', 'cohort.anno.vcf.gz.tbi']
 names = sorted(p.name for p in (root / 'pipeline_info').glob('annotation-*.provenance.json'))
 assert names == [f'annotation-{step}.provenance.json' for step in
                  ('cadd', 'clinvar', 'control', 'gnomad', 'merge', 'preprocess', 'vep')], names
 assert len(list(root.rglob('*.filtered.acmg.tsv'))) == 1
+assert len(list(root.rglob('*.filtered.review.xlsx'))) == 1
 assert len(list(root.rglob('*.filtered.vcf.gz'))) == 1
 print('Annotation as one task per step, and its cached resume, passed')
 PY
@@ -112,20 +113,23 @@ root = Path(sys.argv[1])
 def names(case, pattern):
     return sorted(p.name for p in (root / case).rglob(pattern))
 ANNOTATE = ['ANNOTATE_CADD', 'ANNOTATE_MERGE', 'ANNOTATE_PREPROCESS'] + ['ANNOTATE_STEP'] * 4
-PRIORITIZE = ['PRIORITIZE_ACMG', 'PRIORITIZE_COMBINE', 'PRIORITIZE_JOIN', 'PRIORITIZE_SPLICING', 'PRIORITIZE_UTR']
-STEPS = ['acmg', 'combine', 'join', 'splicing', 'utr']
+PRIORITIZE = ['PRIORITIZE_ACMG', 'PRIORITIZE_COMBINE', 'PRIORITIZE_JOIN', 'PRIORITIZE_SPLICING', 'PRIORITIZE_UTR', 'PRIORITIZE_WORKBOOK']
+STEPS = ['acmg', 'combine', 'join', 'splicing', 'utr', 'workbook']
 ANNOTATION_RECORDS = [f'annotation-{s}.provenance.json' for s in ('cadd', 'clinvar', 'control', 'gnomad', 'merge', 'preprocess', 'vep')]
 def tasks(case):
     trace = sorted((root / case / 'pipeline_info').glob('trace-*.tsv'))[-1]
     return sorted(row['name'].split(' ')[0] for row in csv.DictReader(trace.open(), delimiter='\t'))
 assert tasks('cohort') == sorted(ANNOTATE + ['FILTER_FAMILY', 'FILTER_FAMILY', 'VALIDATE_INPUTS'] + PRIORITIZE * 2), tasks('cohort')
 assert names('cohort', '*.filtered.acmg.tsv') == ['cohort.anno.FAM.filtered.acmg.tsv', 'cohort.anno.OTHER.filtered.acmg.tsv'], names('cohort', '*.acmg.tsv')
+# Every family gets its review workbook.
+assert names('cohort', '*.review.xlsx') == ['cohort.anno.FAM.filtered.review.xlsx', 'cohort.anno.OTHER.filtered.review.xlsx'], names('cohort', '*.xlsx')
 assert names('cohort', '*.provenance.json') == sorted(ANNOTATION_RECORDS + ['filtration.FAM.provenance.json', 'filtration.OTHER.provenance.json'] + [f'prioritization-{s}.{f}.provenance.json' for s in STEPS for f in ('FAM', 'OTHER')]), names('cohort', '*.provenance.json')
 contract = json.loads(next((root / 'cohort').rglob('contract.json')).read_text())
 assert contract['families'] == ['OTHER', 'FAM'], contract['families']
 assert contract['family_samples'] == {'OTHER': ['other'], 'FAM': ['child', 'dad', 'mom']}, contract['family_samples']
 assert tasks('no-pedigree') == sorted(ANNOTATE + ['FILTER_FAMILY', 'VALIDATE_INPUTS'] + PRIORITIZE), tasks('no-pedigree')
 assert names('no-pedigree', '*.filtered.acmg.tsv') == ['cohort.anno.filtered.acmg.tsv'], names('no-pedigree', '*.acmg.tsv')
+assert names('no-pedigree', '*.filtered.review.xlsx') == ['cohort.anno.filtered.review.xlsx'], names('no-pedigree', '*.xlsx')
 assert names('no-pedigree', '*.filtered.vcf.gz') == ['cohort.anno.filtered.vcf.gz']
 contract = json.loads(next((root / 'no-pedigree').rglob('contract.json')).read_text())
 assert contract['families'] == [] and contract['ped_sha256'] is None, contract
@@ -228,7 +232,7 @@ root = Path(sys.argv[1]) / 'spliceai2'
 trace = sorted((root / 'pipeline_info').glob('trace-*.tsv'))[-1]
 names = sorted(row['name'].split(':')[-1] for row in csv.DictReader(trace.open(), delimiter='\t'))
 assert [n for n in names if n.startswith('SCORE_SPLICEAI2')] == ['SCORE_SPLICEAI2 (FAM)', 'SCORE_SPLICEAI2 (OTHER)'], names
-for step in ('COMBINE', 'SPLICING', 'UTR', 'JOIN', 'ACMG'):
+for step in ('COMBINE', 'SPLICING', 'UTR', 'JOIN', 'ACMG', 'WORKBOOK'):
     assert len([n for n in names if n.startswith(f'PRIORITIZE_{step} ')]) == 2, names
 for family in ('FAM', 'OTHER'):
     record = json.loads((root / 'pipeline_info' / f'prioritization-spliceai2.{family}.provenance.json').read_text())

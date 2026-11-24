@@ -142,6 +142,11 @@ spliceai_indel_prescore: ""
 # gives them out to users who accept its terms. The Python has the spliceai2 package.
 spliceai2_model_dir: ""
 spliceai2_python: ""
+
+# The review workbook of every family (PRIORITIZE_WORKBOOK): how many top-ranked
+# variants it holds, with all their transcript rows. Excel holds about one million
+# rows; a whole family table has more.
+review_workbook_top_variants: 1000
 ####################################################Above you set by hand before the installation####################################################
 
 

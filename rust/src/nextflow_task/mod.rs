@@ -187,8 +187,9 @@ const LAUNCH_REQUIRED: &[&str] = &[
 /// `annotation-merge` joins their INFO fields. `prioritization` runs every
 /// prioritization step in one task; `prioritization-combine`, `-splicing`,
 /// `-utr` and `-acmg` run one step each, `prioritization-join` joins the
-/// splicing and 5' UTR copies of the family table, and the optional
-/// `prioritization-spliceai2` fills the combined table's empty SpliceAI scores.
+/// splicing and 5' UTR copies of the family table, the optional
+/// `prioritization-spliceai2` fills the combined table's empty SpliceAI scores,
+/// and `prioritization-workbook` writes the review workbook of the ranked table.
 pub(crate) const PHASES: &[&str] = &[
     "annotation",
     "annotation-preprocess",
@@ -206,6 +207,7 @@ pub(crate) const PHASES: &[&str] = &[
     "prioritization-utr",
     "prioritization-join",
     "prioritization-acmg",
+    "prioritization-workbook",
 ];
 
 fn parse_task(args: &[String]) -> std::result::Result<(String, Options), String> {
@@ -288,6 +290,7 @@ fn parse_task(args: &[String]) -> std::result::Result<(String, Options), String>
                     | "prioritization-utr"
                     | "prioritization-join"
                     | "prioritization-acmg"
+                    | "prioritization-workbook"
             ) {
                 options.require(&["table"])?;
             } else {

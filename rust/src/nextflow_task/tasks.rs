@@ -933,8 +933,10 @@ pub(crate) fn run(options: &Options) -> Result<()> {
         .filter(|v| !v.is_empty())
         .map(PathBuf::from);
     if let Some(path) = &phenotype_gene_ranking {
-        if phase != "prioritization-acmg" {
-            return refuse("--phenotype-gene-ranking belongs to the prioritization-acmg phase");
+        if !matches!(phase, "prioritization-acmg" | "prioritization-workbook") {
+            return refuse(
+                "--phenotype-gene-ranking belongs to the prioritization-acmg and prioritization-workbook phases",
+            );
         }
         if !path.is_file() {
             return refuse(format!(
@@ -1003,8 +1005,13 @@ pub(crate) fn run(options: &Options) -> Result<()> {
             | "prioritization-utr"
             | "prioritization-join"
             | "prioritization-acmg"
+            | "prioritization-workbook"
     );
-    let input_vcf = if table_phase {
+    // The workbook step only reads the ranked table, which can hold millions
+    // of rows: it takes the staged table as it is, without a copy.
+    let input_vcf = if phase == "prioritization-workbook" {
+        PathBuf::from(options.value("table"))
+    } else if table_phase {
         copy_writable(
             Path::new(options.value("table")),
             &result.join(format!("{family_base}.tsv")),
@@ -1071,6 +1078,10 @@ pub(crate) fn run(options: &Options) -> Result<()> {
             | "prioritization-splicing"
             | "prioritization-utr"
             | "prioritization-join" => {}
+            "prioritization-workbook" => fs::write(
+                result.join(format!("{family_base}.review.xlsx")),
+                "STUB_ONLY",
+            )?,
             "filtration" => {
                 let destination = result.join(format!("{family_base}.vcf.gz"));
                 copy_writable(&input_vcf, &destination)?;
@@ -1208,6 +1219,14 @@ pub(crate) fn run(options: &Options) -> Result<()> {
             "prioritization-acmg" => {
                 crate::pipeline_steps::family::acmg(&steps, &input, family.as_deref())?;
             }
+            "prioritization-workbook" => {
+                crate::pipeline_steps::family::workbook(
+                    &steps,
+                    &input,
+                    family.as_deref(),
+                    &result.join(format!("{family_base}.review.xlsx")),
+                )?;
+            }
             // Without a family the steps run their no-pedigree mode.
             "filtration" => {
                 crate::pipeline_steps::family::filtration(&steps, &input, family.as_deref())?;
@@ -1235,6 +1254,7 @@ pub(crate) fn run(options: &Options) -> Result<()> {
         | "prioritization-splicing"
         | "prioritization-utr"
         | "prioritization-join" => &[".tsv"],
+        "prioritization-workbook" => &[".review.xlsx"],
         _ => &[".tsv", ".acmg.tsv"],
     };
     let stem = if phase.starts_with("annotation") {

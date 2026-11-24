@@ -1,6 +1,6 @@
 nextflow.enable.dsl=2
 
-include { VALIDATE_INPUTS; ANNOTATE_PREPROCESS; ANNOTATE_STEP; ANNOTATE_CADD; SPLIT_CHROMOSOMES; GATHER_PIECES; ANNOTATE_MERGE; HUB_LOOKUP; HUB_FILL; HUB_ADD; HUB_REFRESH_PLAN; FILTER_FAMILY; PRIORITIZE_COMBINE; SCORE_SPLICEAI2; PRIORITIZE_SPLICING; PRIORITIZE_UTR; PRIORITIZE_JOIN; PRIORITIZE_ACMG } from './modules/local/compatibility'
+include { VALIDATE_INPUTS; ANNOTATE_PREPROCESS; ANNOTATE_STEP; ANNOTATE_CADD; SPLIT_CHROMOSOMES; GATHER_PIECES; ANNOTATE_MERGE; HUB_LOOKUP; HUB_FILL; HUB_ADD; HUB_REFRESH_PLAN; FILTER_FAMILY; PRIORITIZE_COMBINE; SCORE_SPLICEAI2; PRIORITIZE_SPLICING; PRIORITIZE_UTR; PRIORITIZE_JOIN; PRIORITIZE_ACMG; PRIORITIZE_WORKBOOK } from './modules/local/compatibility'
 include { INSTALL_RESOURCES } from './workflows/install'
 include { RANK_PHENOTYPE_GENES } from './modules/local/phenotype_genes'
 
@@ -128,6 +128,8 @@ Optional: --ped COHORT.ped --family ID --vcf_index VCF.vcf.gz.tbi
             priva hpo-gene-ranking and the installed reference (install step
             F10). On for each family with terms; families without terms rank
             as before
+          Every family also gets a review workbook (*.filtered.review.xlsx):
+            the top-ranked variants in the reviewers' column order
           spliceai2_model_dir and spliceai2_python in CONFIG.yaml: the SpliceAI2
             model scores the insertions, deletions and multi-base
             substitutions its published tables do not hold (SCORE_SPLICEAI2)
@@ -352,6 +354,13 @@ outputs and scientific-profile requirements.'''
             .filter { item -> item[1] != null }
             .map { family, run, table, bundle, ranking -> [run, family, table, ranking ?: [], bundle] }
         PRIORITIZE_ACMG(toAcmg)
+        // Every family's review workbook, from its ranked table and, where it
+        // has one, its gene ranking.
+        def toWorkbook = PRIORITIZE_ACMG.out.tables
+            .map { run, family, table, criteria -> [family, table] }
+            .join(toAcmg.map { run, family, table, ranking, bundle -> [family, run, ranking, bundle] })
+            .map { family, table, run, ranking, bundle -> [run, family, table, ranking, bundle] }
+        PRIORITIZE_WORKBOOK(toWorkbook)
     }
 }
 
